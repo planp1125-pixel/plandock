@@ -1,0 +1,34 @@
+{
+  "name": "Untitled Project",
+  "send_sequences": [
+    {
+      "id": "2d300bb7-547d-4fe4-8011-ef4f7e3fee2a",
+      "name": "sartorius cal",
+      "data": "--------------------<CR><LF>                    <CR><LF>      Sartorius     <CR><LF>Mod.         BSA223S<CR><LF>Ser. no.    27993414<CR><LF>Ver. no.    00-32-09<CR><LF>ID           0123   <CR><LF>--------------------<CR><LF>Cal. Ext. Test      <CR><LF>Set   +  100.000 g  <CR><LF>Diff. +    0.001 g  <CR><LF>Cal. Ext. Complete  <CR><LF>Diff.      0.000 g  <CR><LF>                    <CR><LF>--------------------<CR><LF>                    <CR><LF>Name:               <CR><LF>                    <CR><LF>--------------------<CR><LF><CR><LF><CR><LF>",
+      "view_mode": "Ascii",
+      "hotkey": null,
+      "periodic_enabled": null,
+      "periodic_interval": null
+    },
+    {
+      "id": "0a1ea135-b225-42ff-8aaf-ae23b8dc9a71",
+      "name": "token",
+      "data": "27 80 13 10",
+      "view_mode": "Decimal",
+      "hotkey": null,
+      "periodic_enabled": true,
+      "periodic_interval": 7000
+    }
+  ],
+  "reactions": [
+    {
+      "id": "842a1386-6939-4499-8426-614d14471580",
+      "name": "New Rule",
+      "trigger_data": "<ESC>P<CR><LF>",
+      "response_sequence_id": "2d300bb7-547d-4fe4-8011-ef4f7e3fee2a",
+      "enabled": true,
+      "view_mode": "Ascii"
+    }
+  ],
+  "serial_config": null
+}
