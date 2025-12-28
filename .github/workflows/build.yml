@@ -59,6 +59,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tagName: app-v__VERSION__
+          releaseName: "Plan Terminal v__VERSION__"
+          releaseBody: "See the assets to download this version and install."
+          releaseDraft: true
+          prerelease: false
           projectPath: docklite
           args: --target x86_64-pc-windows-msvc
 
@@ -80,6 +85,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tagName: app-v__VERSION__
+          releaseName: "Plan Terminal v__VERSION__"
+          releaseBody: "See the assets to download this version and install."
+          releaseDraft: true
+          prerelease: false
           projectPath: docklite
           # Note: MacOS builds require valid signing identity for full distribution.
           # If not configured, it will build unsign/ad-hoc.
