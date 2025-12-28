@@ -45,6 +45,10 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
             if (!path) return;
 
             const loaded = await invoke<Project>("load_project_file", { path });
+            // Auto-fix legacy default names
+            if (loaded.name === "Untitled Project" || loaded.name === "New Project") {
+                loaded.name = "Plan Terminal";
+            }
             onUpdate(loaded);
         } catch (e) {
             console.error(e);
