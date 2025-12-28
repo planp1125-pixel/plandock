@@ -20,12 +20,17 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
     const handleSave = async () => {
         try {
             const path = await save({
-                filters: [{ name: 'Docklite Project', extensions: ['dock', 'json'] }]
+                filters: [{ name: 'Plan Terminal Project', extensions: ['plant', 'json'] }]
             });
             if (!path) return;
 
-            await invoke("save_project_file", { path, project });
-            // alert("Saved to " + path);
+            let finalPath = path;
+            if (!finalPath.endsWith('.plant') && !finalPath.endsWith('.json')) {
+                finalPath += '.plant';
+            }
+
+            await invoke("save_project_file", { path: finalPath, project });
+            alert("Project saved successfully to " + finalPath);
         } catch (e) {
             console.error(e);
             alert("Error saving: " + e);
@@ -35,7 +40,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
     const handleLoad = async () => {
         try {
             const path = await open({
-                filters: [{ name: 'Docklite Project', extensions: ['dock', 'json'] }]
+                filters: [{ name: 'Plan Terminal Project', extensions: ['plant', 'json'] }]
             });
             if (!path) return;
 

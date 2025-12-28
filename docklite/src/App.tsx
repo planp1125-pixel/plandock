@@ -12,7 +12,7 @@ import "./index.css";
 
 function App() {
   const [project, setProject] = useState<Project>({
-    name: "Untitled Project",
+    name: "Plan Terminal",
     send_sequences: [],
     reactions: [],
     serial_config: undefined
@@ -251,7 +251,9 @@ function App() {
         <div className="flex items-center gap-3">
           <div className="w-6 h-6 bg-primary rounded-md flex items-center justify-center font-bold text-primary-foreground">P</div>
           <h1 className="text-lg font-bold">Plan Terminal</h1>
-          <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">{project.name}</span>
+          {project.name !== "Plan Terminal" && (
+            <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">{project.name}</span>
+          )}
 
           {/* Dark Mode Toggle */}
           <button

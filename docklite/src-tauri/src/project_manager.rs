@@ -34,7 +34,7 @@ pub struct Project {
 impl Project {
     pub fn new() -> Self {
         Self {
-            name: "New Project".to_string(),
+            name: "Plan Terminal".to_string(),
             send_sequences: vec![],
             reactions: vec![],
             serial_config: None,

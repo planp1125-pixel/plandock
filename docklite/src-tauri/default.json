@@ -6,14 +6,18 @@
       "name": "sartorius cal",
       "data": "--------------------<CR><LF>                    <CR><LF>      Sartorius     <CR><LF>Mod.         BSA223S<CR><LF>Ser. no.    27993414<CR><LF>Ver. no.    00-32-09<CR><LF>ID           0123   <CR><LF>--------------------<CR><LF>Cal. Ext. Test      <CR><LF>Set   +  100.000 g  <CR><LF>Diff. +    0.001 g  <CR><LF>Cal. Ext. Complete  <CR><LF>Diff.      0.000 g  <CR><LF>                    <CR><LF>--------------------<CR><LF>                    <CR><LF>Name:               <CR><LF>                    <CR><LF>--------------------<CR><LF><CR><LF><CR><LF>",
       "view_mode": "Ascii",
-      "hotkey": null
+      "hotkey": null,
+      "periodic_enabled": null,
+      "periodic_interval": null
     },
     {
       "id": "0a1ea135-b225-42ff-8aaf-ae23b8dc9a71",
       "name": "token",
-      "data": "27 80 13 10",
-      "view_mode": "Decimal",
-      "hotkey": null
+      "data": "<ESC>P<CR><LF>",
+      "view_mode": "Ascii",
+      "hotkey": null,
+      "periodic_enabled": false,
+      "periodic_interval": 1000
     }
   ],
   "reactions": [
