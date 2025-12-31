@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plan Terminal | Professional Serial Debugging Reimagined</title>
+    <meta name="description" content="A professional, cross-platform alternative to Docklight. Fast, intuitive, and completely free.">
+    <link rel="icon" href="assets/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <header>
+        <nav class="container">
+            <div class="logo">
+                <img src="assets/logo.png" alt="Plan Terminal Logo">
+                <span>Plan Terminal</span>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#features">Features</a></li>
+                <li><a href="#download" class="btn btn-primary">Download</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section class="hero container">
+            <div class="hero-content">
+                <h1 class="reveal">Master Your <span class="text-gradient">Serial Communication</span>.</h1>
+                <p class="reveal delay-1">A professional, cross-platform serial terminal for hardware engineers. Fast, intuitive, and built for modern workflows.</p>
+                <div class="hero-actions reveal delay-2">
+                    <a href="#download" class="btn btn-large btn-primary">Get Started for Free</a>
+                    <a href="https://github.com/planp1125-pixel/plan_terminal" target="_blank" class="btn btn-large btn-secondary">
+                        <i data-lucide="github"></i> View on GitHub
+                    </a>
+                </div>
+            </div>
+            <div class="hero-visual reveal delay-3">
+                <img src="assets/hero.png" alt="Plan Terminal Interface" class="floating">
+            </div>
+        </section>
+
+        <section id="features" class="features container">
+            <div class="section-header">
+                <h2>Why Choose <span class="text-gradient">Plan Terminal</span>?</h2>
+                <p>Designed to be the killer alternative to legacy debugging tools.</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card glass reveal">
+                    <div class="feature-icon bg-green"><i data-lucide="move"></i></div>
+                    <h3>Smart Reordering</h3>
+                    <p>Effortlessly organize your sequences and reaction rules with native drag-and-drop.</p>
+                </div>
+                <div class="feature-card glass reveal delay-1">
+                    <div class="feature-icon bg-cyan"><i data-lucide="search"></i></div>
+                    <h3>Pattern Highlighting</h3>
+                    <p>Instantly spot critical data with intelligent Hex and ASCII pattern highlighting.</p>
+                </div>
+                <div class="feature-card glass reveal delay-2">
+                    <div class="feature-icon bg-yellow"><i data-lucide="zap"></i></div>
+                    <h3>Automated Reactions</h3>
+                    <p>Set up complex auto-response rules to automate your hardware testing and protocols.</p>
+                </div>
+                <div class="feature-card glass reveal delay-3">
+                    <div class="feature-icon bg-purple"><i data-lucide="monitor"></i></div>
+                    <h3>Cross-Platform</h3>
+                    <p>Native performance on Windows, macOS, and Linux. Built with the security of Tauri.</p>
+                </div>
+                <div class="feature-card glass reveal delay-4">
+                    <div class="feature-icon bg-blue"><i data-lucide="clock"></i></div>
+                    <h3>Smart Timestamps</h3>
+                    <p>Configure custom timestamp gaps to group related data packets logically.</p>
+                </div>
+                <div class="feature-card glass reveal delay-5">
+                    <div class="feature-icon bg-red"><i data-lucide="file-output"></i></div>
+                    <h3>Easy Log Export</h3>
+                    <p>Export your terminal data to TXT files with professional HEX/ASCII formatting.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="download" class="cta-section container reveal">
+            <div class="cta-card glass">
+                <h2>Ready to Upgrade Your Workflow?</h2>
+                <p>Download the latest version of Plan Terminal for your operating system.</p>
+                <div class="download-grid">
+                    <a href="#" class="btn btn-download">
+                        <i data-lucide="windows"></i>
+                        <span>Windows (.exe)</span>
+                    </a>
+                    <a href="#" class="btn btn-download">
+                        <i data-lucide="apple"></i>
+                        <span>macOS (.dmg)</span>
+                    </a>
+                    <a href="#" class="btn btn-download">
+                        <i data-lucide="linux"></i>
+                        <span>Linux (.deb)</span>
+                    </a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="container">
+        <div class="footer-content">
+            <div class="footer-logo">
+                <img src="assets/logo.png" alt="Plan Terminal Logo">
+                <span>Plan Terminal</span>
+            </div>
+            <p>&copy; 2025 Plan Terminal. MIT Licensed.</p>
+        </div>
+    </footer>
+
+    <script>
+        lucide.createIcons();
+
+        // Reveal on scroll
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('active');
+                }
+            });
+        }, { threshold: 0.1 });
+
+        document.querySelectorAll('.reveal').forEach((el) => observer.observe(el));
+    </script>
+</body>
+</html>
