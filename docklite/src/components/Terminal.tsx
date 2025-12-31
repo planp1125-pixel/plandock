@@ -1,6 +1,6 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { clsx } from 'clsx';
-import { Download, Trash2 } from 'lucide-react';
+import { Download, Trash2, Search, X } from 'lucide-react';
 import { save, message } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 
@@ -28,9 +28,15 @@ type TimestampMode = "none" | "each" | "line";
 
 export function Terminal({ logs, onClear }: Props) {
     const bottomRef = useRef<HTMLDivElement>(null);
+    const searchInputRef = useRef<HTMLInputElement>(null);
     const [viewMode, setViewMode] = useState<"Ascii" | "Hex">("Ascii");
     const [autoScroll, setAutoScroll] = useState(true);
     const [timestampMode, setTimestampMode] = useState<TimestampMode>("each");
+
+    // Search state
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [filterMode, setFilterMode] = useState(false); // true = show only matching lines
 
     const [timestampGap, setTimestampGap] = useState<number>(() => {
         return Number(localStorage.getItem('terminal-ts-gap') || '100');
@@ -40,6 +46,24 @@ export function Terminal({ logs, onClear }: Props) {
     useEffect(() => {
         localStorage.setItem('terminal-ts-gap', timestampGap.toString());
     }, [timestampGap]);
+
+    // Handle Ctrl+F keyboard shortcut
+    const handleKeyDown = useCallback((e: KeyboardEvent) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            e.preventDefault();
+            setSearchOpen(true);
+            setTimeout(() => searchInputRef.current?.focus(), 50);
+        }
+        if (e.key === 'Escape' && searchOpen) {
+            setSearchOpen(false);
+            setSearchQuery("");
+        }
+    }, [searchOpen]);
+
+    useEffect(() => {
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [handleKeyDown]);
 
     useEffect(() => {
         if (autoScroll) {
@@ -56,21 +80,43 @@ export function Terminal({ logs, onClear }: Props) {
         return `${date} ${time}`;
     };
 
-    const renderData = (bytes: number[]) => {
+    // Helper to highlight text matches
+    const highlightMatches = (text: string, query: string, key: string) => {
+        if (!query) return text;
+        const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`(${escapedQuery})`, 'gi');
+        const parts = text.split(regex);
+        return parts.map((part, i) =>
+            part.toLowerCase() === query.toLowerCase()
+                ? <mark key={`${key}-${i}`} className="bg-yellow-500 text-black px-0.5 rounded">{part}</mark>
+                : part
+        );
+    };
+
+    const renderData = (bytes: number[], highlight?: string) => {
         if (viewMode === 'Hex') {
-            return bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+            const hexStr = bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+            return highlight ? highlightMatches(hexStr, highlight, 'hex') : hexStr;
         } else {
             const elements: any[] = [];
             let currentString = "";
+
+            const flushString = (key: string) => {
+                if (currentString) {
+                    if (highlight) {
+                        elements.push(<span key={key}>{highlightMatches(currentString, highlight, key)}</span>);
+                    } else {
+                        elements.push(<span key={key}>{currentString}</span>);
+                    }
+                    currentString = "";
+                }
+            };
 
             for (let i = 0; i < bytes.length; i++) {
                 const b = bytes[i];
                 if (b < 32 || b === 127) {
                     // Flush accumulated string
-                    if (currentString) {
-                        elements.push(<span key={`s-${i}`}>{currentString}</span>);
-                        currentString = "";
-                    }
+                    flushString(`s-${i}`);
 
                     const name = CONTROL_CHAR_NAMES[b] || "??";
                     const color = b === 13 ? "text-orange-500" :
@@ -91,12 +137,20 @@ export function Terminal({ logs, onClear }: Props) {
                 }
             }
 
-            if (currentString) {
-                elements.push(<span key="final-s">{currentString}</span>);
-            }
+            flushString("final-s");
 
             return elements;
         }
+    };
+
+    // Plain text version for searching (works in both modes)
+    const getSearchableText = (bytes: number[]): string => {
+        return bytes.map(b => {
+            if (b < 32 || b === 127) {
+                return `<${CONTROL_CHAR_NAMES[b] || "??"}>`;
+            }
+            return String.fromCharCode(b);
+        }).join('');
     };
 
     const handleExport = async () => {
@@ -194,11 +248,14 @@ export function Terminal({ logs, onClear }: Props) {
                         >Timestamp</button>
                     </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                     <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none">
                         <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
                         Auto-scroll
                     </label>
+                    <button onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50); }} className={clsx("p-1 hover:text-white", searchOpen && "text-yellow-400")} title="Search (Ctrl+F)">
+                        <Search className="w-4 h-4" />
+                    </button>
                     <button onClick={handleExport} className="p-1 hover:text-white" title="Export">
                         <Download className="w-4 h-4" />
                     </button>
@@ -208,20 +265,58 @@ export function Terminal({ logs, onClear }: Props) {
                 </div>
             </div>
 
+            {/* Search Bar */}
+            {searchOpen && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-zinc-800 border-b border-zinc-700">
+                    <Search className="w-4 h-4 text-zinc-500" />
+                    <input
+                        ref={searchInputRef}
+                        type="text"
+                        placeholder="Search... (ESC to close)"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="flex-1 bg-zinc-900 text-white rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
+                    />
+                    <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none">
+                        <input type="checkbox" checked={filterMode} onChange={e => setFilterMode(e.target.checked)} />
+                        Filter
+                    </label>
+                    {searchQuery && (
+                        <span className="text-xs text-zinc-500">
+                            {logs.filter(log => {
+                                const text = getSearchableText(log.data);
+                                return text.toLowerCase().includes(searchQuery.toLowerCase());
+                            }).length} matches
+                        </span>
+                    )}
+                    <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 hover:text-red-400" title="Close">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+            )}
+
             {/* Log Area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-1">
                 {/* Windowed rendering: only show last 500 logs in DOM, but keeps 10k in memory */}
-                {logs.slice(-500).map(log => (
-                    <div key={log.id} className="flex gap-2 hover:bg-zinc-900/50">
-                        {timestampMode !== 'none' && (
-                            <span className="text-zinc-500 select-none">[{formatTimestamp(log.timestamp)}]</span>
-                        )}
-                        <span className={log.direction === 'TX' ? "text-blue-400 font-bold" : "text-orange-400 font-bold"}>
-                            {log.direction}
-                        </span>
-                        <span className="break-all whitespace-pre-wrap">{renderData(log.data)}</span>
-                    </div>
-                ))}
+                {logs.slice(-500)
+                    .filter(log => {
+                        if (!searchQuery || !filterMode) return true;
+                        const text = getSearchableText(log.data);
+                        return text.toLowerCase().includes(searchQuery.toLowerCase());
+                    })
+                    .map(log => (
+                        <div key={log.id} className="flex gap-2 hover:bg-zinc-900/50">
+                            {timestampMode !== 'none' && (
+                                <span className="text-zinc-500 select-none">[{formatTimestamp(log.timestamp)}]</span>
+                            )}
+                            <span className={log.direction === 'TX' ? "text-blue-400 font-bold" : "text-orange-400 font-bold"}>
+                                {log.direction}
+                            </span>
+                            <span className={clsx("break-all whitespace-pre-wrap", log.direction === 'TX' ? "text-cyan-400" : "text-yellow-400")}>
+                                {renderData(log.data, searchQuery || undefined)}
+                            </span>
+                        </div>
+                    ))}
                 <div ref={bottomRef} />
             </div>
         </div>
