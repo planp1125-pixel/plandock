@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { Sequence } from "../types";
-import { X, Save, Trash2, Play, Pause } from "lucide-react";
+import { X, Save, Trash2, Play, Pause, Plus } from "lucide-react";
 import { parseData, bytesToHex } from "../utils";
+import { CrcType, calculateCrc } from "../crc";
 
 interface Props {
     sequence: Sequence;
@@ -23,6 +24,8 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
     const [periodicEnabled, setPeriodicEnabled] = useState(sequence.periodic_enabled || false);
     const [periodicInterval, setPeriodicInterval] = useState(sequence.periodic_interval || 1000);
     const periodicRef = useRef<number | null>(null);
+    // CRC
+    const [crcType, setCrcType] = useState<CrcType>('none');
 
 
     // Handle periodic sending
@@ -349,7 +352,7 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
                 </div>
 
                 <div className="flex justify-between gap-2 pt-2 border-t">
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 items-center">
                         {onDelete && (
                             <button
                                 onClick={() => { onDelete(sequence); onClose(); }}
@@ -359,6 +362,41 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
                                 <Trash2 className="w-4 h-4" /> Delete
                             </button>
                         )}
+                        {/* CRC Controls */}
+                        <div className="flex items-center gap-1 border rounded px-2 py-1">
+                            <span className="text-xs text-muted-foreground">CRC:</span>
+                            <select
+                                value={crcType}
+                                onChange={e => setCrcType(e.target.value as CrcType)}
+                                className="bg-background border rounded px-2 py-1 text-xs"
+                            >
+                                <option value="none">None</option>
+                                <option value="crc8">CRC-8</option>
+                                <option value="crc16-modbus">CRC-16 MODBUS</option>
+                                <option value="crc32">CRC-32</option>
+                            </select>
+                            <button
+                                onClick={() => {
+                                    if (crcType === 'none') return;
+                                    const bytes = parseData(data, viewMode);
+                                    const crcBytes = calculateCrc(bytes, crcType);
+                                    if (crcBytes.length > 0) {
+                                        const crcHex = crcBytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+                                        if (viewMode === 'Hex') {
+                                            setData(data.trim() + ' ' + crcHex);
+                                        } else {
+                                            // In ASCII/Decimal mode, append as hex
+                                            setData(data + crcBytes.map(b => `<${b}>`).join(''));
+                                        }
+                                    }
+                                }}
+                                disabled={crcType === 'none'}
+                                className="px-2 py-1 bg-secondary hover:bg-secondary/80 rounded text-xs flex items-center gap-1 disabled:opacity-50"
+                                title="Append CRC bytes to data"
+                            >
+                                <Plus className="w-3 h-3" /> Append
+                            </button>
+                        </div>
                     </div>
                     <div className="flex gap-2 items-center">
                         {/* Periodic Send */}
