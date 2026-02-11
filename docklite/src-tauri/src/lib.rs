@@ -1,9 +1,11 @@
+mod license;
 mod project_manager;
 mod serial_manager;
-use project_manager::{load_project, save_project, Project};
+use license::{LicenseManager, LicenseStatus};
+use project_manager::{load_project, save_project, import_ptp_file, Project};
 use serial_manager::{PortInfo, Reaction, SerialConfig, SerialManager};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Manager, State};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -64,6 +66,11 @@ fn load_project_file(path: String) -> Result<Project, String> {
 }
 
 #[tauri::command]
+fn import_docklight_file(path: String) -> Result<Project, String> {
+    import_ptp_file(&path)
+}
+
+#[tauri::command]
 fn set_reactions(state: State<'_, Arc<SerialManager>>, new_reactions: Vec<Reaction>) {
     state.set_reactions(new_reactions);
 }
@@ -73,12 +80,51 @@ fn set_packet_timeout(state: State<'_, Arc<SerialManager>>, timeout: u64) {
     state.set_packet_timeout(timeout);
 }
 
+// License commands
+#[tauri::command]
+fn get_license_status(state: State<'_, LicenseManager>) -> LicenseStatus {
+    state.get_status()
+}
+
+#[tauri::command]
+fn activate_license(state: State<'_, LicenseManager>, key: String) -> Result<bool, String> {
+    state.activate(&key)
+}
+
+#[tauri::command]
+fn deactivate_license(state: State<'_, LicenseManager>) -> Result<(), String> {
+    state.deactivate()
+}
+
+// Logging commands
+#[tauri::command]
+fn start_logging(state: State<'_, Arc<SerialManager>>, path: String, format: String) -> Result<(), String> {
+    state.start_logging(&path, &format)
+}
+
+#[tauri::command]
+fn stop_logging(state: State<'_, Arc<SerialManager>>) {
+    state.stop_logging();
+}
+
+#[tauri::command]
+fn is_logging(state: State<'_, Arc<SerialManager>>) -> bool {
+    state.is_logging()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            // Initialize LicenseManager with app data directory
+            let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
+            let license_manager = LicenseManager::new(app_data_dir);
+            app.manage(license_manager);
+            Ok(())
+        })
         .manage(Arc::new(SerialManager::new()))
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -90,6 +136,13 @@ pub fn run() {
             load_project_file,
             set_reactions,
             set_packet_timeout,
+            get_license_status,
+            activate_license,
+            deactivate_license,
+            import_docklight_file,
+            start_logging,
+            stop_logging,
+            is_logging,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

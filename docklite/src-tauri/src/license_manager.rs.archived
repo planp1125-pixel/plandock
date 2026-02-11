@@ -1,0 +1,326 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+
+const TRIAL_DAYS: i64 = 14;
+
+// LemonSqueezy API endpoints
+const LEMONSQUEEZY_ACTIVATE_URL: &str = "https://api.lemonsqueezy.com/v1/licenses/activate";
+const LEMONSQUEEZY_DEACTIVATE_URL: &str = "https://api.lemonsqueezy.com/v1/licenses/deactivate";
+const LEMONSQUEEZY_VALIDATE_URL: &str = "https://api.lemonsqueezy.com/v1/licenses/validate";
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct LicenseStatus {
+    pub is_pro: bool,
+    pub is_trial: bool,
+    pub trial_days_remaining: i64,
+    pub license_key: Option<String>,
+    pub instance_id: Option<String>, // LemonSqueezy instance ID for deactivation
+    pub activated_at: Option<String>,
+    pub trial_started_at: Option<String>,
+}
+
+// LemonSqueezy API response structures
+#[derive(Deserialize, Debug)]
+struct LemonSqueezyActivateResponse {
+    activated: bool,
+    #[serde(default)]
+    error: Option<String>,
+    instance: Option<LemonSqueezyInstance>,
+    license_key: Option<LemonSqueezyLicenseKey>,
+}
+
+#[derive(Deserialize, Debug)]
+struct LemonSqueezyDeactivateResponse {
+    deactivated: bool,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct LemonSqueezyValidateResponse {
+    valid: bool,
+    license_key: Option<LemonSqueezyLicenseKey>,
+}
+
+#[derive(Deserialize, Debug)]
+struct LemonSqueezyInstance {
+    id: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct LemonSqueezyLicenseKey {
+    status: String,
+    #[serde(default)]
+    activation_limit: i32,
+    #[serde(default)]
+    activation_usage: i32,
+}
+
+#[derive(Clone)]
+pub struct LicenseManager {
+    storage_path: PathBuf,
+    instance_name: String,
+}
+
+impl LicenseManager {
+    pub fn new(app_data_dir: PathBuf) -> Self {
+        let storage_path = app_data_dir.join("license.json");
+
+        // Generate a unique instance name for this device
+        let instance_name = Self::get_machine_id();
+
+        Self {
+            storage_path,
+            instance_name,
+        }
+    }
+
+    /// Get a unique machine identifier
+    fn get_machine_id() -> String {
+        // Try to get hostname + username as unique identifier
+        let hostname = hostname::get()
+            .map(|h| h.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        let username = whoami::username();
+
+        format!("{}-{}", hostname, username)
+    }
+
+    /// Basic format validation (doesn't hit API, just checks format)
+    fn validate_key_format(&self, key: &str) -> bool {
+        // LemonSqueezy keys are typically UUID format or custom
+        // Accept any key that's at least 8 chars
+        key.trim().len() >= 8
+    }
+
+    /// Validate license key via LemonSqueezy API (doesn't consume activation)
+    fn validate_key_online(&self, key: &str) -> Result<bool, String> {
+        let client = reqwest::blocking::Client::new();
+
+        let response = client
+            .post(LEMONSQUEEZY_VALIDATE_URL)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .form(&[("license_key", key)])
+            .send()
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        let data: LemonSqueezyValidateResponse =
+            response.json().map_err(|e| format!("Parse error: {}", e))?;
+
+        if data.valid {
+            if let Some(lk) = data.license_key {
+                return Ok(lk.status == "active");
+            }
+        }
+
+        Ok(false)
+    }
+
+    /// Activate license key via LemonSqueezy API (consumes activation slot)
+    fn activate_key_online(&self, key: &str) -> Result<String, String> {
+        let client = reqwest::blocking::Client::new();
+
+        let response = client
+            .post(LEMONSQUEEZY_ACTIVATE_URL)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .form(&[("license_key", key), ("instance_name", &self.instance_name)])
+            .send()
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        let data: LemonSqueezyActivateResponse =
+            response.json().map_err(|e| format!("Parse error: {}", e))?;
+
+        if data.activated {
+            if let Some(instance) = data.instance {
+                return Ok(instance.id);
+            }
+            return Err("Activation successful but no instance ID returned".to_string());
+        }
+
+        // Handle specific error messages
+        if let Some(error) = data.error {
+            if error.contains("limit") || error.contains("activation") {
+                return Err(
+                    "Activation limit reached. Please deactivate from another device first."
+                        .to_string(),
+                );
+            }
+            return Err(error);
+        }
+
+        Err("License activation failed".to_string())
+    }
+
+    /// Deactivate license key via LemonSqueezy API (frees activation slot)
+    fn deactivate_key_online(&self, key: &str, instance_id: &str) -> Result<(), String> {
+        let client = reqwest::blocking::Client::new();
+
+        let response = client
+            .post(LEMONSQUEEZY_DEACTIVATE_URL)
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .form(&[("license_key", key), ("instance_id", instance_id)])
+            .send()
+            .map_err(|e| format!("Network error: {}", e))?;
+
+        let data: LemonSqueezyDeactivateResponse =
+            response.json().map_err(|e| format!("Parse error: {}", e))?;
+
+        if data.deactivated {
+            return Ok(());
+        }
+
+        if let Some(error) = data.error {
+            return Err(error);
+        }
+
+        Err("License deactivation failed".to_string())
+    }
+
+    /// Load license from disk and check trial status
+    pub fn get_status(&self) -> LicenseStatus {
+        // Try to load existing status
+        if let Ok(content) = fs::read_to_string(&self.storage_path) {
+            if let Ok(mut status) = serde_json::from_str::<LicenseStatus>(&content) {
+                // Check if we have a stored license with instance_id
+                if let (Some(ref key), Some(ref _instance_id)) =
+                    (&status.license_key, &status.instance_id)
+                {
+                    if self.validate_key_format(key) {
+                        status.is_pro = true;
+                        status.is_trial = false;
+                        status.trial_days_remaining = 0;
+                        return status;
+                    }
+                }
+
+                // Check trial status
+                if let Some(ref trial_start) = status.trial_started_at {
+                    if let Ok(start_date) = trial_start.parse::<DateTime<Utc>>() {
+                        let elapsed = Utc::now().signed_duration_since(start_date);
+                        let days_remaining = TRIAL_DAYS - elapsed.num_days();
+
+                        if days_remaining > 0 {
+                            // Trial still active
+                            return LicenseStatus {
+                                is_pro: true,
+                                is_trial: true,
+                                trial_days_remaining: days_remaining,
+                                license_key: None,
+                                instance_id: None,
+                                activated_at: None,
+                                trial_started_at: Some(trial_start.clone()),
+                            };
+                        } else {
+                            // Trial expired
+                            return LicenseStatus {
+                                is_pro: false,
+                                is_trial: false,
+                                trial_days_remaining: 0,
+                                license_key: None,
+                                instance_id: None,
+                                activated_at: None,
+                                trial_started_at: Some(trial_start.clone()),
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        // First run - start trial
+        let trial_start = Utc::now().to_rfc3339();
+        let status = LicenseStatus {
+            is_pro: true,
+            is_trial: true,
+            trial_days_remaining: TRIAL_DAYS,
+            license_key: None,
+            instance_id: None,
+            activated_at: None,
+            trial_started_at: Some(trial_start),
+        };
+
+        // Save trial start
+        if let Some(parent) = self.storage_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(
+            &self.storage_path,
+            serde_json::to_string_pretty(&status).unwrap_or_default(),
+        );
+
+        status
+    }
+
+    /// Activate a license key via LemonSqueezy (consumes activation slot)
+    pub fn activate(&self, key: &str) -> Result<bool, String> {
+        let key_trimmed = key.trim().to_string();
+
+        // First check basic format
+        if !self.validate_key_format(&key_trimmed) {
+            return Err("Invalid license key format".to_string());
+        }
+
+        // Activate with LemonSqueezy API (this consumes an activation slot)
+        match self.activate_key_online(&key_trimmed) {
+            Ok(instance_id) => {
+                // License activated successfully - save it with instance_id
+                let status = LicenseStatus {
+                    is_pro: true,
+                    is_trial: false,
+                    trial_days_remaining: 0,
+                    license_key: Some(key_trimmed),
+                    instance_id: Some(instance_id),
+                    activated_at: Some(Utc::now().to_rfc3339()),
+                    trial_started_at: None,
+                };
+
+                // Ensure parent directory exists
+                if let Some(parent) = self.storage_path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+
+                fs::write(
+                    &self.storage_path,
+                    serde_json::to_string_pretty(&status).map_err(|e| e.to_string())?,
+                )
+                .map_err(|e| e.to_string())?;
+
+                Ok(true)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Deactivate the current license (frees activation slot for use on another device)
+    pub fn deactivate(&self) -> Result<(), String> {
+        // Load current status to get license key and instance_id
+        if let Ok(content) = fs::read_to_string(&self.storage_path) {
+            if let Ok(status) = serde_json::from_str::<LicenseStatus>(&content) {
+                if let (Some(key), Some(instance_id)) = (status.license_key, status.instance_id) {
+                    // Deactivate online first (free the activation slot)
+                    if let Err(e) = self.deactivate_key_online(&key, &instance_id) {
+                        // Log the error but continue with local deactivation
+                        eprintln!("Warning: Online deactivation failed: {}", e);
+                    }
+                }
+            }
+        }
+
+        // Clear local license data (keep trial info for reference)
+        let new_status = LicenseStatus::default();
+
+        fs::write(
+            &self.storage_path,
+            serde_json::to_string_pretty(&new_status).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(())
+    }
+}

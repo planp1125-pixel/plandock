@@ -1,11 +1,18 @@
 use serde::{Deserialize, Serialize};
-use serialport::{
-    DataBits, FlowControl, Parity, SerialPort, SerialPortInfo, SerialPortType, StopBits,
-};
+use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits};
+use std::fs::{File, OpenOptions};
+use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LogFormat {
+    Hex,
+    Ascii,
+    Both,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PortInfo {
@@ -35,6 +42,8 @@ pub struct SerialManager {
     is_reading: Arc<Mutex<bool>>,
     reactions: Arc<Mutex<Vec<Reaction>>>,
     packet_timeout: Arc<Mutex<u64>>,
+    log_file: Arc<Mutex<Option<BufWriter<File>>>>,
+    log_format: Arc<Mutex<LogFormat>>,
 }
 
 impl SerialManager {
@@ -45,6 +54,8 @@ impl SerialManager {
             is_reading: Arc::new(Mutex::new(false)),
             reactions: Arc::new(Mutex::new(Vec::new())),
             packet_timeout: Arc::new(Mutex::new(100)),
+            log_file: Arc::new(Mutex::new(None)),
+            log_format: Arc::new(Mutex::new(LogFormat::Both)),
         }
     }
 
@@ -56,6 +67,115 @@ impl SerialManager {
     pub fn set_reactions(&self, new_reactions: Vec<Reaction>) {
         let mut r_lock = self.reactions.lock().unwrap();
         *r_lock = new_reactions;
+    }
+
+    /// Start real-time logging to a file
+    pub fn start_logging(&self, path: &str, format: &str) -> Result<(), String> {
+        let log_format = match format {
+            "hex" => LogFormat::Hex,
+            "ascii" => LogFormat::Ascii,
+            _ => LogFormat::Both,
+        };
+
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| e.to_string())?;
+
+        let mut writer = BufWriter::new(file);
+
+        // Write header
+        let header = format!(
+            "=== Plan Terminal Log Started: {} ===\n",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+        writer
+            .write_all(header.as_bytes())
+            .map_err(|e| e.to_string())?;
+        writer.flush().map_err(|e| e.to_string())?;
+
+        let mut lf = self.log_format.lock().unwrap();
+        *lf = log_format;
+        drop(lf);
+
+        let mut lfile = self.log_file.lock().unwrap();
+        *lfile = Some(writer);
+
+        Ok(())
+    }
+
+    /// Stop logging and close the file
+    pub fn stop_logging(&self) {
+        let mut lfile = self.log_file.lock().unwrap();
+        if let Some(ref mut writer) = *lfile {
+            let footer = format!(
+                "=== Plan Terminal Log Ended: {} ===\n",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+            );
+            let _ = writer.write_all(footer.as_bytes());
+            let _ = writer.flush();
+        }
+        *lfile = None;
+    }
+
+    /// Check if logging is active
+    pub fn is_logging(&self) -> bool {
+        self.log_file.lock().unwrap().is_some()
+    }
+
+    /// Write a log entry
+    fn write_log_entry(
+        log_file: &Arc<Mutex<Option<BufWriter<File>>>>,
+        log_format: &Arc<Mutex<LogFormat>>,
+        data: &[u8],
+        direction: &str,
+    ) {
+        let mut lfile = log_file.lock().unwrap();
+        if let Some(ref mut writer) = *lfile {
+            let format = *log_format.lock().unwrap();
+            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.6f");
+
+            let formatted_data = match format {
+                LogFormat::Hex => data
+                    .iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                LogFormat::Ascii => data
+                    .iter()
+                    .map(|b| {
+                        if *b >= 32 && *b < 127 {
+                            (*b as char).to_string()
+                        } else {
+                            format!("<{:02X}>", b)
+                        }
+                    })
+                    .collect::<String>(),
+                LogFormat::Both => {
+                    let hex = data
+                        .iter()
+                        .map(|b| format!("{:02X}", b))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let ascii: String = data
+                        .iter()
+                        .map(|b| {
+                            if *b >= 32 && *b < 127 {
+                                *b as char
+                            } else {
+                                '.'
+                            }
+                        })
+                        .collect();
+                    format!("{} | {}", hex, ascii)
+                }
+            };
+
+            let line = format!("[{}] {} {}\n", timestamp, direction, formatted_data);
+            let _ = writer.write_all(line.as_bytes());
+            let _ = writer.flush();
+        }
     }
 
     pub fn list_ports() -> Vec<PortInfo> {
@@ -154,6 +274,8 @@ impl SerialManager {
         let is_reading = self.is_reading.clone();
         let reactions_clone = self.reactions.clone();
         let packet_timeout_clone = self.packet_timeout.clone();
+        let log_file_clone = self.log_file.clone();
+        let log_format_clone = self.log_format.clone();
 
         let mut reader_lock = is_reading.lock().unwrap();
         if *reader_lock {
@@ -198,6 +320,9 @@ impl SerialManager {
                             // Emit immediately: Zero Latency
                             let _ = app.emit("serial-data", (data.clone(), ts, "RX"));
 
+                            // Write to log file if logging is active
+                            Self::write_log_entry(&log_file_clone, &log_format_clone, &data, "RX");
+
                             // Still maintain rolling buffer for reactions
                             rolling_buffer.extend_from_slice(&data);
                             if rolling_buffer.len() > 8192 {
@@ -215,7 +340,7 @@ impl SerialManager {
                                         .duration_since(UNIX_EPOCH)
                                         .unwrap()
                                         .as_millis();
-                                    
+
                                     // Emit event immediately (before wire transmission)
                                     let _ = app.emit(
                                         "serial-data",
@@ -235,6 +360,14 @@ impl SerialManager {
                                         let _ = port.write_all(&r.response_data);
                                         let _ = port.flush();
                                     }
+
+                                    // Log TX_AUTO to file
+                                    Self::write_log_entry(
+                                        &log_file_clone,
+                                        &log_format_clone,
+                                        &r.response_data,
+                                        "TX_AUTO",
+                                    );
                                 }
                             }
                         }
@@ -256,6 +389,8 @@ impl SerialManager {
             match port.write_all(&data) {
                 Ok(_) => {
                     let _ = port.flush();
+                    // Log TX data
+                    Self::write_log_entry(&self.log_file, &self.log_format, &data, "TX");
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),

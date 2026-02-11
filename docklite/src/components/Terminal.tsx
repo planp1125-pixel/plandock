@@ -1,8 +1,10 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { clsx } from 'clsx';
-import { Download, Trash2, Search, X } from 'lucide-react';
+import { Download, Trash2, Search, X, FileText, Lock } from 'lucide-react';
 import { save, message } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
+import { invoke } from '@tauri-apps/api/core';
+import { useLicense, FREE_LIMITS } from '../contexts/LicenseContext';
 
 const CONTROL_CHAR_NAMES: Record<number, string> = {
     0: "NUL", 1: "SOH", 2: "STX", 3: "ETX", 4: "EOT", 5: "ENQ", 6: "ACK", 7: "BEL",
@@ -33,10 +35,50 @@ export function Terminal({ logs, onClear }: Props) {
     const [autoScroll, setAutoScroll] = useState(true);
     const [timestampMode, setTimestampMode] = useState<TimestampMode>("each");
 
+    // Pro tier status
+    const { isPro } = useLicense();
+
     // Search state
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [filterMode, setFilterMode] = useState(false); // true = show only matching lines
+
+    // Real-time logging state
+    const [isLogging, setIsLogging] = useState(false);
+    const [logPath, setLogPath] = useState<string | null>(null);
+
+    const handleStartLogging = async () => {
+        try {
+            const path = await save({
+                filters: [{
+                    name: 'Log Files',
+                    extensions: ['log', 'txt']
+                }],
+                defaultPath: `plan_terminal_${Date.now()}.log`
+            });
+
+            if (path) {
+                await invoke('start_logging', { path, format: 'both' });
+                setIsLogging(true);
+                setLogPath(path);
+                await message(`Logging started: ${path}`, { title: 'Logging Active', kind: 'info' });
+            }
+        } catch (error) {
+            console.error('Failed to start logging:', error);
+            await message(`Failed to start logging: ${error}`, { title: 'Error', kind: 'error' });
+        }
+    };
+
+    const handleStopLogging = async () => {
+        try {
+            await invoke('stop_logging');
+            setIsLogging(false);
+            await message(`Log saved: ${logPath}`, { title: 'Logging Stopped', kind: 'info' });
+            setLogPath(null);
+        } catch (error) {
+            console.error('Failed to stop logging:', error);
+        }
+    };
 
     const [timestampGap, setTimestampGap] = useState<number>(() => {
         return Number(localStorage.getItem('terminal-ts-gap') || '100');
@@ -127,7 +169,7 @@ export function Terminal({ logs, onClear }: Props) {
                     elements.push(
                         <span key={`c-${i}`}>
                             <span className={clsx("font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5", color)}>
-                                {name}
+                                &lt;{name}&gt;
                             </span>
                             {b === 10 && formatMode === 'Formatted' ? <br /> : null}
                         </span>
@@ -155,7 +197,13 @@ export function Terminal({ logs, onClear }: Props) {
 
     const handleExport = async () => {
         try {
-            const text = logs.map(l => {
+            // Free users limited to last 100 lines, Pro users get all
+            const exportLogs = isPro ? logs : logs.slice(-FREE_LIMITS.MAX_EXPORT_LINES);
+            const limitNotice = !isPro && logs.length > FREE_LIMITS.MAX_EXPORT_LINES
+                ? `\n\n--- FREE VERSION: Only last ${FREE_LIMITS.MAX_EXPORT_LINES} entries exported. Upgrade to Pro for unlimited export. ---\n`
+                : '';
+
+            const text = exportLogs.map(l => {
                 // Use the same format for export
                 const tsString = formatTimestamp(l.timestamp);
                 const hex = l.data.map(b => b.toString(16).padStart(2, '0')).join(' ');
@@ -168,7 +216,7 @@ export function Terminal({ logs, onClear }: Props) {
 
                 const prefix = timestampMode !== 'none' ? `[${tsString}] ` : '';
                 return `${prefix}[${l.direction}] HEX: ${hex} | ASCII: ${ascii}`;
-            }).join('\n');
+            }).join('\n') + limitNotice;
 
             const path = await save({
                 filters: [{
@@ -256,7 +304,21 @@ export function Terminal({ logs, onClear }: Props) {
                     <button onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50); }} className={clsx("p-1 hover:text-white", searchOpen && "text-yellow-400")} title="Search (Ctrl+F)">
                         <Search className="w-4 h-4" />
                     </button>
-                    <button onClick={handleExport} className="p-1 hover:text-white" title="Export">
+                    {/* Real-time Log Button - Pro Only */}
+                    <button
+                        onClick={isPro ? (isLogging ? handleStopLogging : handleStartLogging) : undefined}
+                        className={clsx(
+                            "p-1 flex items-center gap-1 text-xs rounded",
+                            !isPro ? "text-zinc-600 cursor-not-allowed" :
+                                isLogging ? "text-red-400 bg-red-900/30 animate-pulse" : "hover:text-white"
+                        )}
+                        title={!isPro ? "Real-time Logging (Pro Feature)" : isLogging ? "Stop Logging" : "Start Logging to File"}
+                    >
+                        {!isPro ? <Lock className="w-3 h-3" /> : <FileText className="w-4 h-4" />}
+                        {isLogging && <span className="text-[10px]">LOG</span>}
+                        {!isPro && <span className="text-[10px]">PRO</span>}
+                    </button>
+                    <button onClick={handleExport} className="p-1 hover:text-white" title="Download Session">
                         <Download className="w-4 h-4" />
                     </button>
                     <button onClick={onClear} className="p-1 hover:text-red-400" title="Clear">

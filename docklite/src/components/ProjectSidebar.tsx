@@ -163,11 +163,19 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
     const handleLoad = async () => {
         try {
             const path = await open({
-                filters: [{ name: 'Plan Terminal Project', extensions: ['plant', 'json'] }]
+                filters: [
+                    { name: 'All Supported Files', extensions: ['plant', 'json', 'ptp'] }
+                ]
             });
             if (!path) return;
 
-            const loaded = await invoke<Project>("load_project_file", { path });
+            let loaded: Project;
+            if (path.toLowerCase().endsWith('.ptp')) {
+                loaded = await invoke<Project>("import_docklight_file", { path });
+            } else {
+                loaded = await invoke<Project>("load_project_file", { path });
+            }
+
             // Auto-fix legacy default names
             if (loaded.name === "Untitled Project" || loaded.name === "New Project") {
                 loaded.name = "Plan Terminal";

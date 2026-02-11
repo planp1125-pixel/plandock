@@ -5,9 +5,12 @@ import { ProjectSidebar } from "./components/ProjectSidebar";
 import { Terminal, LogEntry } from "./components/Terminal";
 import { SequenceEditor } from "./components/SequenceEditor";
 import { ReactionEditor } from "./components/ReactionEditor";
+import { LicenseDialog } from "./components/LicenseDialog";
+import { LicenseProvider, useLicense } from "./contexts/LicenseContext";
 import { Project, Sequence, Reaction, PortInfo } from "./types";
 import { parseData } from "./utils";
-import { RotateCw, Settings, Moon, Sun, ChevronDown } from "lucide-react";
+import { RotateCw, Settings, Moon, Sun, ChevronDown, Crown } from "lucide-react";
+import penguinLogo from "./assets/penguin_logo.png";
 import "./index.css";
 
 function App() {
@@ -37,6 +40,7 @@ function App() {
   const [stopBits, setStopBits] = useState(1);
   const [flowControl, setFlowControl] = useState("None");
   const [showSettings, setShowSettings] = useState(false);
+  const [showLicenseDialog, setShowLicenseDialog] = useState(false);
 
   // Dark mode
   const [darkMode, setDarkMode] = useState(() => {
@@ -132,6 +136,54 @@ function App() {
   }, []);
 
   // No changes needed to parseData calls if imports are correct
+
+  // Sync project serial config to UI state when project loads (force apply if new project)
+  // Sync project serial config to UI state when project loads (force apply if new project)
+  useEffect(() => {
+    // Safety check: Only apply if valid config exists and not connected
+    if (project.serial_config && !connected) {
+      const cfg = project.serial_config;
+
+      // Apply values only if they differ from current UI state to avoid loops
+      if (cfg.baud_rate && cfg.baud_rate !== baudRate) setBaudRate(cfg.baud_rate);
+
+      if (cfg.port_name && cfg.port_name !== selectedPort) {
+        if (ports.some(p => p.port_name === cfg.port_name)) {
+          setSelectedPort(cfg.port_name);
+        }
+      }
+
+      if (cfg.data_bits && cfg.data_bits !== dataBits) setDataBits(cfg.data_bits);
+      if (cfg.parity && cfg.parity !== parity) setParity(cfg.parity);
+      if (cfg.stop_bits && cfg.stop_bits !== stopBits) setStopBits(cfg.stop_bits);
+      if (cfg.flow_control && cfg.flow_control !== flowControl) setFlowControl(cfg.flow_control);
+    }
+  }, [project.serial_config, connected]);
+
+  // Sync UI serial settings BACK to project state for saving
+  useEffect(() => {
+    setProject(prev => {
+      // Check if update is needed to avoid re-renders
+      const newConfig = {
+        port_name: selectedPort,
+        baud_rate: baudRate,
+        data_bits: dataBits,
+        flow_control: flowControl,
+        parity: parity,
+        stop_bits: stopBits
+      };
+
+      // Deep compare simply via JSON stringify for small config object
+      if (JSON.stringify(prev.serial_config) === JSON.stringify(newConfig)) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        serial_config: newConfig
+      };
+    });
+  }, [selectedPort, baudRate, dataBits, flowControl, parity, stopBits]);
 
   // Sync reactions to backend
   useEffect(() => {
@@ -249,7 +301,7 @@ function App() {
     <div className="h-screen w-screen bg-background text-foreground flex flex-col overflow-hidden">
       <header className="px-3 py-2 border-b flex justify-between items-center bg-card shadow-sm shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-6 h-6 bg-primary rounded-md flex items-center justify-center font-bold text-primary-foreground">P</div>
+          <img src={penguinLogo} alt="Plan Terminal" className="w-7 h-7 rounded" />
           <h1 className="text-lg font-bold">Plan Terminal</h1>
           {project.name !== "Plan Terminal" && (
             <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">{project.name}</span>
@@ -262,6 +314,15 @@ function App() {
             title={darkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
           >
             {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+
+          {/* License/Pro Button */}
+          <button
+            onClick={() => setShowLicenseDialog(true)}
+            className="p-1.5 hover:bg-accent rounded"
+            title="License & Pro Features"
+          >
+            <Crown className="w-4 h-4" />
           </button>
         </div>
 
@@ -527,8 +588,23 @@ function App() {
           }}
         />
       )}
+
+      {/* License Dialog */}
+      <LicenseDialog
+        isOpen={showLicenseDialog}
+        onClose={() => setShowLicenseDialog(false)}
+      />
     </div>
   );
 }
 
-export default App;
+// Wrap App with LicenseProvider
+function AppWithLicense() {
+  return (
+    <LicenseProvider>
+      <App />
+    </LicenseProvider>
+  );
+}
+
+export default AppWithLicense;
