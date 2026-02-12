@@ -6,12 +6,14 @@ import { Terminal, LogEntry } from "./components/Terminal";
 import { SequenceEditor } from "./components/SequenceEditor";
 import { ReactionEditor } from "./components/ReactionEditor";
 import { LicenseDialog } from "./components/LicenseDialog";
-import { LicenseProvider, useLicense } from "./contexts/LicenseContext";
+import { LicenseProvider } from "./contexts/LicenseContext";
 import { Project, Sequence, Reaction, PortInfo } from "./types";
 import { parseData } from "./utils";
-import { RotateCw, Settings, Moon, Sun, ChevronDown, Crown } from "lucide-react";
+import { RotateCw, Settings, Moon, Sun, ChevronDown, Crown, LineChart as LineChartIcon } from "lucide-react";
 import penguinLogo from "./assets/penguin_logo.png";
 import "./index.css";
+import { ChartWindow } from "./components/ChartWindow";
+import { ChartConfig, ChartDataPoint, extractValue } from "./chart_utils";
 
 function App() {
   const [project, setProject] = useState<Project>({
@@ -28,6 +30,20 @@ function App() {
   const [editingSeq, setEditingSeq] = useState<Sequence | null>(null);
   const [editingReaction, setEditingReaction] = useState<Reaction | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(320);
+
+  // Chart State
+  const [isChartOpen, setIsChartOpen] = useState(false);
+  const [chartConfigs, setChartConfigs] = useState<ChartConfig[]>([]);
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+
+  // Refs for Chart to access latest state in listeners
+  const chartConfigsRef = useRef<ChartConfig[]>([]);
+  const chartDataQueue = useRef<ChartDataPoint[]>([]);
+
+  // Update refs when state changes
+  useEffect(() => {
+    chartConfigsRef.current = chartConfigs;
+  }, [chartConfigs]);
 
   // Port selection state (lifted to header)
   const [ports, setPorts] = useState<PortInfo[]>([]);
@@ -75,39 +91,45 @@ function App() {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      if (incomingQueue.current.length === 0) return;
+      // 1. Process Logs
+      if (incomingQueue.current.length > 0) {
+        const batch = [...incomingQueue.current];
+        incomingQueue.current = [];
 
-      const batch = [...incomingQueue.current];
-      incomingQueue.current = [];
+        setLogs(prev => {
+          if (batch.length === 0) return prev;
+          let next = [...prev];
+          const gap = Number(localStorage.getItem('terminal-ts-gap') || '100');
 
-      setLogs(prev => {
-        if (batch.length === 0) return prev;
-
-        let next = [...prev];
-        const gap = Number(localStorage.getItem('terminal-ts-gap') || '100');
-
-        for (const item of batch) {
-          const last = lastRef.current;
-          // O(1) Check: Is the very last item in 'next' the one we want to append to?
-          if (last && next.length > 0 && next[next.length - 1].id === last.id &&
-            last.direction === item.dir && (item.ts - last.timestamp) < gap) {
-
-            // Fast Append
-            const lastIdx = next.length - 1;
-            next[lastIdx] = {
-              ...next[lastIdx],
-              data: [...next[lastIdx].data, ...item.bytes]
-            };
-          } else {
-            // New log entry
-            const id = Math.random().toString(36).substr(2, 9);
-            lastRef.current = { id, timestamp: item.ts, direction: item.dir };
-            next.push({ id, timestamp: item.ts, direction: item.dir as any, data: item.bytes });
+          for (const item of batch) {
+            const last = lastRef.current;
+            if (last && next.length > 0 && next[next.length - 1].id === last.id &&
+              last.direction === item.dir && (item.ts - last.timestamp) < gap) {
+              const lastIdx = next.length - 1;
+              next[lastIdx] = { ...next[lastIdx], data: [...next[lastIdx].data, ...item.bytes] };
+            } else {
+              const id = Math.random().toString(36).substr(2, 9);
+              lastRef.current = { id, timestamp: item.ts, direction: item.dir };
+              next.push({ id, timestamp: item.ts, direction: item.dir as any, data: item.bytes });
+            }
           }
-        }
-        return next.slice(-10000);
-      });
-    }, 16);
+          return next.slice(-10000);
+        });
+      }
+
+      // 2. Process Chart Data (Throttled update)
+      if (chartDataQueue.current.length > 0) {
+        const newPoints = [...chartDataQueue.current];
+        chartDataQueue.current = [];
+
+        setChartData(prev => {
+          // Keep last 100 points for performance
+          const combined = [...prev, ...newPoints];
+          return combined.slice(-100);
+        });
+      }
+
+    }, 32); // 30fps
 
     // Listen for incoming data
     const unlisten = listen<any>('serial-data', (event) => {
@@ -127,6 +149,31 @@ function App() {
       }
 
       incomingQueue.current.push({ bytes, ts, dir });
+
+      // Chart Processing
+      if (dir === "RX" && chartConfigsRef.current.length > 0) {
+        // Convert bytes to string (assuming ASCII/UTF8 for now)
+        // Simple ASCII conversion
+        const line = String.fromCharCode(...bytes);
+
+        let hasData = false;
+        const point: ChartDataPoint = { timestamp: ts };
+
+        // Check each config
+        chartConfigsRef.current.forEach(cfg => {
+          if (cfg.enabled) {
+            const val = extractValue(line, cfg);
+            if (val !== null) {
+              point[cfg.name] = val;
+              hasData = true;
+            }
+          }
+        });
+
+        if (hasData) {
+          chartDataQueue.current.push(point);
+        }
+      }
     });
 
     return () => {
@@ -135,9 +182,8 @@ function App() {
     };
   }, []);
 
-  // No changes needed to parseData calls if imports are correct
+  // ... (rest of standard effects)
 
-  // Sync project serial config to UI state when project loads (force apply if new project)
   // Sync project serial config to UI state when project loads (force apply if new project)
   useEffect(() => {
     // Safety check: Only apply if valid config exists and not connected
@@ -185,7 +231,7 @@ function App() {
     });
   }, [selectedPort, baudRate, dataBits, flowControl, parity, stopBits]);
 
-  // Sync reactions to backend
+  // Sync reactions to backend (OMITTED for brevity in replacement, essentially same)
   useEffect(() => {
     const backendReactions = project.reactions
       .filter(r => r.enabled)
@@ -199,6 +245,7 @@ function App() {
     invoke("set_reactions", { newReactions: backendReactions }).catch(console.error);
   }, [project]);
 
+  // Periodic Intervals logic ...
   // Track active periodic intervals (by sequence ID)
   const periodicIntervalsRef = useRef<Map<string, number>>(new Map());
 
@@ -324,8 +371,18 @@ function App() {
           >
             <Crown className="w-4 h-4" />
           </button>
+
+          {/* Chart Toggle Button */}
+          <button
+            onClick={() => setIsChartOpen(!isChartOpen)}
+            className={`p-1.5 rounded transition-colors ${isChartOpen ? 'bg-blue-600 text-white' : 'hover:bg-accent'}`}
+            title="Toggle Real-Time Chart"
+          >
+            <LineChartIcon className="w-4 h-4" />
+          </button>
         </div>
 
+        {/* ... (Port Selection code remains same) ... */}
         {/* Port Selection - Docklight Style */}
         <div className="flex items-center gap-2">
           <button
@@ -556,6 +613,16 @@ function App() {
 
           {/* Main Terminal */}
           <div className="flex-1 h-full overflow-hidden">
+            {/* Chart Window Overlay */}
+            <ChartWindow
+              isOpen={isChartOpen}
+              onClose={() => setIsChartOpen(false)}
+              data={chartData}
+              configs={chartConfigs}
+              onConfigChange={setChartConfigs}
+              onClearData={() => setChartData([])}
+            />
+
             <Terminal logs={logs} onClear={() => setLogs([])} />
           </div>
         </div>
