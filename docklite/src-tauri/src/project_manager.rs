@@ -49,7 +49,55 @@ pub fn save_project(path: &str, project: &Project) -> Result<(), String> {
 
 pub fn load_project(path: &str) -> Result<Project, String> {
     let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    serde_json::from_str(&content).map_err(|e| e.to_string())
+    let mut project: Project = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    // Post-process logic: If stored data is Hex but view_mode is Ascii, convert it.
+    // This supports the use case where the JSON file acts as a hex library.
+
+    // 1. Process Send Sequences
+    for seq in &mut project.send_sequences {
+        // Try to detect if data is a hex string (space separated bytes)
+        // We do this regardless of the stored view_mode because users might save in Hex
+        // but want to load as ASCII if it's their "library" format.
+
+        if seq.data.trim().is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = seq.data.split_whitespace().collect();
+        // Heuristic: It's hex if ALL parts differ empty and can be parsed as u8 from hex.
+        // And we have at least one part.
+        let is_hex = !parts.is_empty() && parts.iter().all(|s| u8::from_str_radix(s, 16).is_ok());
+
+        if is_hex {
+            // Convert to ASCII representation
+            let converted = hex_to_ascii_repr(&seq.data);
+            if !converted.is_empty() {
+                seq.data = converted;
+                seq.view_mode = "Ascii".to_string(); // Force view mode to Ascii
+            }
+        }
+    }
+
+    // 2. Process Reactions
+    for rxn in &mut project.reactions {
+        if rxn.trigger_data.trim().is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = rxn.trigger_data.split_whitespace().collect();
+        let is_hex = !parts.is_empty() && parts.iter().all(|s| u8::from_str_radix(s, 16).is_ok());
+
+        if is_hex {
+            let converted = hex_to_ascii_repr(&rxn.trigger_data);
+            if !converted.is_empty() {
+                rxn.trigger_data = converted;
+                rxn.view_mode = "Ascii".to_string(); // Force view mode to Ascii
+            }
+        }
+    }
+
+    Ok(project)
 }
 
 // ============================================================================
@@ -134,6 +182,32 @@ fn generate_id(prefix: &str, index: usize) -> String {
         index,
         chrono::Utc::now().timestamp_millis()
     )
+}
+
+/// Convert space-separated hex string to ASCII representation with tags
+fn hex_to_ascii_repr(hex_str: &str) -> String {
+    let mut result = String::new();
+    let bytes: Vec<u8> = hex_str
+        .split_whitespace()
+        .filter_map(|s| u8::from_str_radix(s, 16).ok())
+        .collect();
+
+    for b in bytes {
+        match b {
+            13 => result.push_str("<CR>"),
+            10 => result.push_str("<LF>"),
+            27 => result.push_str("<ESC>"),
+            0 => result.push_str("<NUL>"),
+            _ => {
+                if b < 32 || b > 126 {
+                    result.push_str(&format!("<{}>", b));
+                } else {
+                    result.push(b as char);
+                }
+            }
+        }
+    }
+    result
 }
 
 /// Import a Docklight .ptp file and convert to Plan Terminal Project
@@ -227,6 +301,9 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
 
                 // Line 3: Hex data (space-separated hex bytes)
                 let hex_data = lines[i].trim().to_string();
+                // Convert to ASCII representation
+                let ascii_data = hex_to_ascii_repr(&hex_data);
+
                 i += 1;
                 if i >= lines.len() {
                     break;
@@ -262,8 +339,8 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
                 sequences.push(Sequence {
                     id: seq_id,
                     name: display_name,
-                    data: hex_data,
-                    view_mode: "Hex".to_string(),
+                    data: ascii_data,               // Use converted data
+                    view_mode: "Ascii".to_string(), // Default to Ascii
                     hotkey: None,
                     periodic_enabled: Some(periodic_flag == 1),
                     periodic_interval: Some(interval),
@@ -291,7 +368,10 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
                 }
 
                 // Line 3: Trigger hex data
-                let trigger_data = lines[i].trim().to_string();
+                let trigger_hex_data = lines[i].trim().to_string();
+                // Convert to ASCII representation
+                let trigger_ascii_data = hex_to_ascii_repr(&trigger_hex_data);
+
                 i += 1;
                 if i >= lines.len() {
                     break;
@@ -329,17 +409,17 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
                 let response_seq_id = if response_index < sequences.len() {
                     sequences[response_index].id.clone()
                 } else {
-                    // Store index as placeholder - will try to resolve later
+                    // Store index as placeholder - try to resolve later
                     format!("pending-{}", response_index)
                 };
 
                 reactions.push(Reaction {
                     id: reaction_id,
                     name: display_name,
-                    trigger_data,
+                    trigger_data: trigger_ascii_data, // Use converted data
                     response_sequence_id: response_seq_id,
                     enabled: true,
-                    view_mode: "Hex".to_string(),
+                    view_mode: "Ascii".to_string(), // Default to Ascii
                 });
             }
 

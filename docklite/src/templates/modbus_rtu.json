@@ -1,0 +1,35 @@
+{
+    "name": "Modbus RTU Basics",
+    "sequences": [
+        {
+            "name": "Read Holding Registers (FC03)",
+            "data": "01 03 00 00 00 01 84 0A",
+            "view_mode": "hex",
+            "description": "Reads 1 register starting at address 0 from Slave 1"
+        },
+        {
+            "name": "Read Input Registers (FC04)",
+            "data": "01 04 00 00 00 01 31 CA",
+            "view_mode": "hex",
+            "description": "Reads 1 input register starting at address 0 from Slave 1"
+        },
+        {
+            "name": "Write Single Coil (FC05) - ON",
+            "data": "01 05 00 00 FF 00 8C 3A",
+            "view_mode": "hex",
+            "description": "Writes ON to coil at address 0 on Slave 1"
+        },
+        {
+            "name": "Write Single Coil (FC05) - OFF",
+            "data": "01 05 00 00 00 00 CD CA",
+            "view_mode": "hex",
+            "description": "Writes OFF to coil at address 0 on Slave 1"
+        },
+        {
+            "name": "Write Single Register (FC06)",
+            "data": "01 06 00 00 00 01 48 0A",
+            "view_mode": "hex",
+            "description": "Writes value 1 to register at address 0 on Slave 1"
+        }
+    ]
+}

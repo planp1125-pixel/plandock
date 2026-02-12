@@ -1,0 +1,41 @@
+{
+    "name": "AT Commands (Cellular)",
+    "sequences": [
+        {
+            "name": "Test AT",
+            "data": "AT\r\n",
+            "view_mode": "ascii",
+            "description": "Basic check"
+        },
+        {
+            "name": "Signal Quality",
+            "data": "AT+CSQ\r\n",
+            "view_mode": "ascii",
+            "description": "Check signal strength"
+        },
+        {
+            "name": "Network Registration",
+            "data": "AT+CREG?\r\n",
+            "view_mode": "ascii",
+            "description": "Check network registration status"
+        },
+        {
+            "name": "GPRS Attachment",
+            "data": "AT+CGATT?\r\n",
+            "view_mode": "ascii",
+            "description": "Check GPRS attachment status"
+        },
+        {
+            "name": "IMEI",
+            "data": "AT+GSN\r\n",
+            "view_mode": "ascii",
+            "description": "Get device IMEI"
+        },
+        {
+            "name": "Operator Selection",
+            "data": "AT+COPS?\r\n",
+            "view_mode": "ascii",
+            "description": "Check current operator"
+        }
+    ]
+}

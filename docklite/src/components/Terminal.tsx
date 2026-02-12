@@ -171,9 +171,34 @@ export function Terminal({ logs, onClear }: Props) {
                             <span className={clsx("font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5", color)}>
                                 &lt;{name}&gt;
                             </span>
-                            {b === 10 && formatMode === 'Formatted' ? <br /> : null}
                         </span>
                     );
+
+                    // Newline Logic
+                    if (formatMode === 'Formatted') {
+                        if (b === 13) {
+                            // If this is CR
+                            if (i + 1 < bytes.length && bytes[i + 1] === 10) {
+                                // Next is LF, handle it now
+                                i++; // Skip next iteration
+                                elements.push(
+                                    <span key={`c-${i}`}>
+                                        <span className="font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5 text-blue-500">
+                                            &lt;LF&gt;
+                                        </span>
+                                    </span>
+                                );
+                                // Single break for CR+LF
+                                elements.push(<br key={`br-${i}`} />);
+                            } else {
+                                // Just CR
+                                elements.push(<br key={`br-${i}`} />);
+                            }
+                        } else if (b === 10) {
+                            // Just LF (not preceded by CR because we cleared it)
+                            elements.push(<br key={`br-${i}`} />);
+                        }
+                    }
                 } else {
                     currentString += String.fromCharCode(b);
                 }

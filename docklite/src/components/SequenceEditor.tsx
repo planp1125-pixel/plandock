@@ -65,10 +65,37 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
 
     useEffect(() => {
         setName(sequence.name);
-        setData(sequence.data);
-        setViewMode(sequence.view_mode);
         setPeriodicInterval(sequence.periodic_interval || 1000);
         setPeriodicEnabled(sequence.periodic_enabled || false);
+
+        // Handle Data Conversion on Load
+        let initialData = sequence.data;
+        // If coming from import (Hex string) but view mode is Ascii, convert it
+        if (sequence.view_mode === 'Ascii') {
+            // Check if it looks like a hex string (space separated pairs)
+            const isHexString = /^([0-9A-Fa-f]{2}\s*)+$/.test(sequence.data.trim());
+            if (isHexString) {
+                try {
+                    const bytes = parseData(sequence.data, 'Hex');
+                    let ascii = '';
+                    for (const byte of bytes) {
+                        if (byte === 13) ascii += '<CR>';
+                        else if (byte === 10) ascii += '<LF>';
+                        else if (byte === 27) ascii += '<ESC>';
+                        else if (byte === 0) ascii += '<NUL>';
+                        else if (byte < 32 || byte > 126) ascii += `<${byte}>`;
+                        else ascii += String.fromCharCode(byte);
+                    }
+                    initialData = ascii;
+                } catch (e) {
+                    // Keep as is if parse fails
+                    console.warn("Failed to auto-convert hex to ascii on load", e);
+                }
+            }
+        }
+
+        setData(initialData);
+        setViewMode(sequence.view_mode);
     }, [sequence]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -368,7 +395,7 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
                             <select
                                 value={crcType}
                                 onChange={e => setCrcType(e.target.value as CrcType)}
-                                className="bg-background border rounded px-2 py-1 text-xs"
+                                className="bg-background dark:bg-slate-800 border rounded px-2 py-1 text-xs"
                             >
                                 <option value="none">None</option>
                                 <option value="crc8">CRC-8</option>

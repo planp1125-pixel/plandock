@@ -40,10 +40,36 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
 
     useEffect(() => {
         setName(reaction.name);
-        setTriggerData(reaction.trigger_data);
         setResponseId(reaction.response_sequence_id);
         setEnabled(reaction.enabled);
-        setViewMode(reaction.view_mode || "Ascii");
+
+        // Handle Data Conversion on Load
+        let initialData = reaction.trigger_data;
+        const initialViewMode = reaction.view_mode || "Ascii";
+
+        if (initialViewMode === 'Ascii') {
+            const isHexString = /^([0-9A-Fa-f]{2}\s*)+$/.test(reaction.trigger_data.trim());
+            if (isHexString) {
+                try {
+                    const bytes = parseData(reaction.trigger_data, 'Hex');
+                    let ascii = '';
+                    for (const byte of bytes) {
+                        if (byte === 13) ascii += '<CR>';
+                        else if (byte === 10) ascii += '<LF>';
+                        else if (byte === 27) ascii += '<ESC>';
+                        else if (byte === 0) ascii += '<NUL>';
+                        else if (byte < 32 || byte > 126) ascii += `<${byte}>`;
+                        else ascii += String.fromCharCode(byte);
+                    }
+                    initialData = ascii;
+                } catch (e) {
+                    console.warn("Failed to auto-convert hex to ascii on reaction load", e);
+                }
+            }
+        }
+
+        setTriggerData(initialData);
+        setViewMode(initialViewMode);
     }, [reaction]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {

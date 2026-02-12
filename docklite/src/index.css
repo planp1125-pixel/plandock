@@ -63,6 +63,8 @@
     --border: 215 28% 20%;
     --input: 215 28% 20%;
     --ring: 210 100% 52%;
+
+    color-scheme: dark;
   }
 }
 
