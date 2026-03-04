@@ -10,7 +10,7 @@ import { LicenseProvider } from "./contexts/LicenseContext";
 import { Project, Sequence, Reaction, PortInfo } from "./types";
 import { parseData } from "./utils";
 import { RotateCw, Settings, Moon, Sun, ChevronDown, Crown, LineChart as LineChartIcon } from "lucide-react";
-import penguinLogo from "./assets/penguin_logo.png";
+import logo from "./assets/logo.png";
 import "./index.css";
 import { ChartWindow } from "./components/ChartWindow";
 import { ChartConfig, ChartDataPoint, extractValue } from "./chart_utils";
@@ -27,6 +27,7 @@ function App() {
   const incomingQueue = useRef<{ bytes: number[], ts: number, dir: string }[]>([]);
   const lastRef = useRef<{ id: string, timestamp: number, direction: string } | null>(null);
   const [connected, setConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [editingSeq, setEditingSeq] = useState<Sequence | null>(null);
   const [editingReaction, setEditingReaction] = useState<Reaction | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(320);
@@ -131,8 +132,38 @@ function App() {
 
     }, 32); // 30fps
 
-    // Listen for incoming data
-    const unlisten = listen<any>('serial-data', (event) => {
+    return () => clearInterval(interval);
+  }, []);
+
+  const [connectionType, setConnectionType] = useState<'Serial' | 'TCP' | 'SSH'>('Serial');
+  const [tcpHost, setTcpHost] = useState('192.168.1.100');
+  const [tcpPort, setTcpPort] = useState(8080);
+  const [sshHost, setSshHost] = useState('192.168.1.100');
+  const [sshPort, setSshPort] = useState(22);
+  const [sshUsername, setSshUsername] = useState('pi');
+  const [sshPassword, setSshPassword] = useState('');
+
+  // Update connection fields when project loads (e.g. from .plant files)
+  useEffect(() => {
+    if (project.serial_config) {
+      setConnectionType('Serial');
+      // Serial is handled by separate logic or is already mostly in place...
+    } else if (project.tcp_config) {
+      setConnectionType('TCP');
+      setTcpHost(project.tcp_config.host);
+      setTcpPort(project.tcp_config.port);
+    } else if (project.ssh_config) {
+      setConnectionType('SSH');
+      setSshHost(project.ssh_config.host);
+      setSshPort(project.ssh_config.port);
+      setSshUsername(project.ssh_config.username);
+      // Password is not saved.
+    }
+  }, [project]);
+
+  useEffect(() => {
+    // Listen for incoming data (both Serial and TCP emit this)
+    const unlistenData = listen<any>('serial-data', (event) => {
       const payload = event.payload;
       let bytes: number[] = [];
       let ts = Date.now();
@@ -152,14 +183,10 @@ function App() {
 
       // Chart Processing
       if (dir === "RX" && chartConfigsRef.current.length > 0) {
-        // Convert bytes to string (assuming ASCII/UTF8 for now)
-        // Simple ASCII conversion
         const line = String.fromCharCode(...bytes);
-
         let hasData = false;
         const point: ChartDataPoint = { timestamp: ts };
 
-        // Check each config
         chartConfigsRef.current.forEach(cfg => {
           if (cfg.enabled) {
             const val = extractValue(line, cfg);
@@ -176,74 +203,23 @@ function App() {
       }
     });
 
+    // Listen for unexpected TCP disconnects
+    const unlistenTcpDisconnect = listen('tcp-disconnected', () => {
+      setConnected(false);
+      alert("TCP Connection closed by remote host or error occurred.");
+    });
+
+    const unlistenSshDisconnect = listen('ssh-disconnected', () => {
+      setConnected(false);
+      alert("SSH Connection closed.");
+    });
+
     return () => {
-      clearInterval(interval);
-      unlisten.then(f => f());
+      unlistenData.then(f => f());
+      unlistenTcpDisconnect.then(f => f());
+      unlistenSshDisconnect.then(f => f());
     };
   }, []);
-
-  // ... (rest of standard effects)
-
-  // Sync project serial config to UI state when project loads (force apply if new project)
-  useEffect(() => {
-    // Safety check: Only apply if valid config exists and not connected
-    if (project.serial_config && !connected) {
-      const cfg = project.serial_config;
-
-      // Apply values only if they differ from current UI state to avoid loops
-      if (cfg.baud_rate && cfg.baud_rate !== baudRate) setBaudRate(cfg.baud_rate);
-
-      if (cfg.port_name && cfg.port_name !== selectedPort) {
-        if (ports.some(p => p.port_name === cfg.port_name)) {
-          setSelectedPort(cfg.port_name);
-        }
-      }
-
-      if (cfg.data_bits && cfg.data_bits !== dataBits) setDataBits(cfg.data_bits);
-      if (cfg.parity && cfg.parity !== parity) setParity(cfg.parity);
-      if (cfg.stop_bits && cfg.stop_bits !== stopBits) setStopBits(cfg.stop_bits);
-      if (cfg.flow_control && cfg.flow_control !== flowControl) setFlowControl(cfg.flow_control);
-    }
-  }, [project.serial_config, connected]);
-
-  // Sync UI serial settings BACK to project state for saving
-  useEffect(() => {
-    setProject(prev => {
-      // Check if update is needed to avoid re-renders
-      const newConfig = {
-        port_name: selectedPort,
-        baud_rate: baudRate,
-        data_bits: dataBits,
-        flow_control: flowControl,
-        parity: parity,
-        stop_bits: stopBits
-      };
-
-      // Deep compare simply via JSON stringify for small config object
-      if (JSON.stringify(prev.serial_config) === JSON.stringify(newConfig)) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        serial_config: newConfig
-      };
-    });
-  }, [selectedPort, baudRate, dataBits, flowControl, parity, stopBits]);
-
-  // Sync reactions to backend (OMITTED for brevity in replacement, essentially same)
-  useEffect(() => {
-    const backendReactions = project.reactions
-      .filter(r => r.enabled)
-      .map(r => {
-        const triggerBytes = parseData(r.trigger_data, r.view_mode);
-        const respSeq = project.send_sequences.find(s => s.id === r.response_sequence_id);
-        const responseData = respSeq ? parseData(respSeq.data, respSeq.view_mode) : [];
-        return { trigger_data: triggerBytes, response_data: responseData };
-      });
-
-    invoke("set_reactions", { newReactions: backendReactions }).catch(console.error);
-  }, [project]);
 
   // Periodic Intervals logic ...
   // Track active periodic intervals (by sequence ID)
@@ -276,7 +252,13 @@ function App() {
         const interval = window.setInterval(async () => {
           const bytes = parseData(seq.data, seq.view_mode);
           try {
-            await invoke("send_serial_data", { data: bytes });
+            if (connectionType === 'Serial') {
+              await invoke("send_serial_data", { data: bytes });
+            } else if (connectionType === 'TCP') {
+              await invoke("send_tcp_data", { data: bytes });
+            } else if (connectionType === 'SSH') {
+              await invoke("send_ssh_data", { data: bytes });
+            }
             incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
           } catch (e) {
             console.error("Periodic send failed:", e);
@@ -298,14 +280,20 @@ function App() {
       // Cleanup all on unmount
       activeIntervals.forEach(interval => clearInterval(interval));
     };
-  }, [project.send_sequences, connected, activePeriodicIds]);
+  }, [project.send_sequences, connected, activePeriodicIds, connectionType]);
 
 
   const handleSend = async (seq: Sequence) => {
     let bytes: number[] = parseData(seq.data, seq.view_mode);
 
     try {
-      await invoke("send_serial_data", { data: bytes });
+      if (connectionType === 'Serial') {
+        await invoke("send_serial_data", { data: bytes });
+      } else if (connectionType === 'TCP') {
+        await invoke("send_tcp_data", { data: bytes });
+      } else if (connectionType === 'SSH') {
+        await invoke("send_ssh_data", { data: bytes });
+      }
       incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
     } catch (e) {
       console.error(e);
@@ -313,25 +301,48 @@ function App() {
     }
   };
 
-  const handleConnect = async (port: string, baud: number, config: any) => {
+  const handleConnect = async () => {
     try {
-      await invoke("open_serial_port", {
-        portName: port,
-        baudRate: baud,
-        dataBits: config.dataBits,
-        flowControl: config.flowControl,
-        parity: config.parity,
-        stopBits: config.stopBits
-      });
+      setIsConnecting(true);
+      if (connectionType === 'Serial') {
+        await invoke("open_serial_port", {
+          portName: selectedPort,
+          baudRate,
+          dataBits,
+          flowControl,
+          parity,
+          stopBits
+        });
+      } else if (connectionType === 'TCP') {
+        await invoke("connect_tcp", {
+          host: tcpHost,
+          port: tcpPort
+        });
+      } else if (connectionType === 'SSH') {
+        await invoke("connect_ssh", {
+          host: sshHost,
+          port: sshPort,
+          user: sshUsername,
+          pass: sshPassword
+        });
+      }
       setConnected(true);
     } catch (e) {
       alert("Connection failed: " + e);
+    } finally {
+      setIsConnecting(false);
     }
   };
 
   const handleDisconnect = async () => {
     try {
-      await invoke("close_serial_port");
+      if (connectionType === 'Serial') {
+        await invoke("close_serial_port");
+      } else if (connectionType === 'TCP') {
+        await invoke("disconnect_tcp");
+      } else if (connectionType === 'SSH') {
+        await invoke("disconnect_ssh");
+      }
       setConnected(false);
     } catch (e) {
       console.error(e);
@@ -348,7 +359,7 @@ function App() {
     <div className="h-screen w-screen bg-background text-foreground flex flex-col overflow-hidden">
       <header className="px-3 py-2 border-b flex justify-between items-center bg-card shadow-sm shrink-0">
         <div className="flex items-center gap-3">
-          <img src={penguinLogo} alt="Plan Terminal" className="w-7 h-7 rounded" />
+          <img src={logo} alt="Plan Terminal" className="w-7 h-7" />
           <h1 className="text-lg font-bold">Plan Terminal</h1>
           {project.name !== "Plan Terminal" && (
             <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">{project.name}</span>
@@ -382,188 +393,307 @@ function App() {
           </button>
         </div>
 
-        {/* ... (Port Selection code remains same) ... */}
-        {/* Port Selection - Docklight Style */}
+        {/* Connection Settings */}
         <div className="flex items-center gap-2">
-          <button
-            onClick={refreshPorts}
-            className="p-1.5 rounded transition-colors"
-            style={{
-              // Use slight transparency or secondary for button to distinguish from bg
-              backgroundColor: darkMode ? 'transparent' : 'hsl(var(--secondary))',
-              color: 'hsl(var(--foreground))',
-              cursor: 'pointer'
-            }}
-            title="Refresh Ports"
-          >
-            <RotateCw className="w-4 h-4" />
-          </button>
+          {/* Connection Type */}
           <div className="relative">
             <select
-              className="rounded px-2 py-1 text-sm min-w-[120px] focus:ring-1 focus:ring-zinc-500 outline-none cursor-pointer appearance-none pr-8"
+              className="rounded px-2 py-1 text-sm focus:ring-1 focus:ring-zinc-500 outline-none cursor-pointer appearance-none pr-8 font-semibold"
               style={{
-                backgroundColor: 'hsl(var(--background))',
+                backgroundColor: darkMode ? 'transparent' : 'hsl(var(--secondary))',
                 color: 'hsl(var(--foreground))',
-                borderColor: 'hsl(var(--border))',
-                borderWidth: '1px',
+                border: '1px solid hsl(var(--border))',
                 colorScheme: darkMode ? 'dark' : 'light'
               }}
-              value={selectedPort}
-              onChange={e => setSelectedPort(e.target.value)}
+              value={connectionType}
+              onChange={(e) => setConnectionType(e.target.value as 'Serial' | 'TCP' | 'SSH')}
               disabled={connected}
             >
-              {ports.length === 0 && <option value="">No ports</option>}
-              {ports.map(p => (
-                <option key={p.port_name} value={p.port_name}>{p.port_name}</option>
-              ))}
+              <option value="Serial">Serial</option>
+              <option value="TCP">TCP</option>
+              <option value="SSH">SSH</option>
             </select>
             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
           </div>
 
-          <div className="relative">
-            <select
-              className="rounded px-2 py-1 text-sm w-24 focus:ring-1 focus:ring-zinc-500 outline-none cursor-pointer appearance-none pr-8"
-              style={{
-                backgroundColor: 'hsl(var(--background))',
-                color: 'hsl(var(--foreground))',
-                borderColor: 'hsl(var(--border))',
-                borderWidth: '1px',
-                colorScheme: darkMode ? 'dark' : 'light'
-              }}
-              value={baudRate}
-              onChange={e => setBaudRate(Number(e.target.value))}
-              disabled={connected}
-            >
-              {[300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600].map(b => (
-                <option key={b} value={b}>{b}</option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
-          </div>
+          <div className="w-[1px] h-6 bg-border mx-1" />
 
-          {/* Settings Button */}
-          <div className="relative">
-            <button
-              onClick={() => setShowSettings(!showSettings)}
-              className="px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors cursor-pointer"
-              style={{
-                backgroundColor: 'hsl(var(--background))',
-                color: 'hsl(var(--foreground))',
-                borderColor: 'hsl(var(--border))',
-                borderWidth: '1px'
-              }}
-              title="Advanced Settings"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              More
-            </button>
-
-            {/* Settings Popup */}
-            {showSettings && (
-              <div
-                className="absolute right-0 top-full mt-1 border rounded-lg shadow-lg p-4 z-50 min-w-[280px]"
+          {connectionType === 'Serial' ? (
+            <>
+              <button
+                onClick={refreshPorts}
+                className="p-1.5 rounded transition-colors"
                 style={{
-                  backgroundColor: 'hsl(var(--popover))',
-                  borderColor: 'hsl(var(--border))',
-                  color: 'hsl(var(--popover-foreground))'
-                }}>
-                <h4 className="font-semibold mb-3">Serial Settings</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Data Bits</label>
-                    <div className="relative">
-                      <select
-                        className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
-                        style={{
-                          backgroundColor: 'hsl(var(--background))',
-                          borderColor: 'hsl(var(--border))',
-                          color: 'hsl(var(--foreground))',
-                          colorScheme: darkMode ? 'dark' : 'light'
-                        }}
-                        value={dataBits} onChange={e => setDataBits(Number(e.target.value))} disabled={connected}>
-                        {[5, 6, 7, 8].map(n => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Stop Bits</label>
-                    <div className="relative">
-                      <select
-                        className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
-                        style={{
-                          backgroundColor: 'hsl(var(--background))',
-                          borderColor: 'hsl(var(--border))',
-                          color: 'hsl(var(--foreground))',
-                          colorScheme: darkMode ? 'dark' : 'light'
-                        }}
-                        value={stopBits} onChange={e => setStopBits(Number(e.target.value))} disabled={connected}>
-                        {[1, 2].map(n => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Parity</label>
-                    <div className="relative">
-                      <select
-                        className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
-                        style={{
-                          backgroundColor: 'hsl(var(--background))',
-                          borderColor: 'hsl(var(--border))',
-                          color: 'hsl(var(--foreground))',
-                          colorScheme: darkMode ? 'dark' : 'light'
-                        }}
-                        value={parity} onChange={e => setParity(e.target.value)} disabled={connected}>
-                        {["None", "Odd", "Even"].map(n => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Flow Control</label>
-                    <div className="relative">
-                      <select
-                        className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
-                        style={{
-                          backgroundColor: 'hsl(var(--background))',
-                          borderColor: 'hsl(var(--border))',
-                          color: 'hsl(var(--foreground))',
-                          colorScheme: darkMode ? 'dark' : 'light'
-                        }}
-                        value={flowControl} onChange={e => setFlowControl(e.target.value)} disabled={connected}>
-                        {["None", "Software", "Hardware"].map(n => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
-                    </div>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowSettings(false)}
-                  className="mt-3 w-full bg-secondary hover:bg-secondary/80 rounded py-1 text-sm"
+                  backgroundColor: darkMode ? 'transparent' : 'hsl(var(--secondary))',
+                  color: 'hsl(var(--foreground))',
+                  cursor: 'pointer'
+                }}
+                title="Refresh Ports"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+              <div className="relative">
+                <select
+                  className="rounded px-2 py-1 text-sm min-w-[120px] focus:ring-1 focus:ring-zinc-500 outline-none cursor-pointer appearance-none pr-8"
+                  style={{
+                    backgroundColor: 'hsl(var(--background))',
+                    color: 'hsl(var(--foreground))',
+                    borderColor: 'hsl(var(--border))',
+                    borderWidth: '1px',
+                    colorScheme: darkMode ? 'dark' : 'light'
+                  }}
+                  value={selectedPort}
+                  onChange={e => setSelectedPort(e.target.value)}
+                  disabled={connected}
                 >
-                  Close
-                </button>
+                  {ports.length === 0 && <option value="">No ports</option>}
+                  {ports.map(p => (
+                    <option key={p.port_name} value={p.port_name}>{p.port_name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
               </div>
-            )}
-          </div>
+
+              <div className="relative">
+                <select
+                  className="rounded px-2 py-1 text-sm w-24 focus:ring-1 focus:ring-zinc-500 outline-none cursor-pointer appearance-none pr-8"
+                  style={{
+                    backgroundColor: 'hsl(var(--background))',
+                    color: 'hsl(var(--foreground))',
+                    borderColor: 'hsl(var(--border))',
+                    borderWidth: '1px',
+                    colorScheme: darkMode ? 'dark' : 'light'
+                  }}
+                  value={baudRate}
+                  onChange={e => setBaudRate(Number(e.target.value))}
+                  disabled={connected}
+                >
+                  {[300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600].map(b => (
+                    <option key={b} value={b}>{b}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
+              </div>
+
+              {/* Settings Button */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowSettings(!showSettings)}
+                  className="px-2 py-1 text-xs rounded flex items-center gap-1 transition-colors cursor-pointer"
+                  style={{
+                    backgroundColor: 'hsl(var(--background))',
+                    color: 'hsl(var(--foreground))',
+                    borderColor: 'hsl(var(--border))',
+                    borderWidth: '1px'
+                  }}
+                  title="Advanced Settings"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                  More
+                </button>
+
+
+                {/* Settings Popup */}
+                {showSettings && (
+                  <div
+                    className="absolute right-0 top-full mt-1 border rounded-lg shadow-lg p-4 z-50 min-w-[280px]"
+                    style={{
+                      backgroundColor: 'hsl(var(--popover))',
+                      borderColor: 'hsl(var(--border))',
+                      color: 'hsl(var(--popover-foreground))'
+                    }}>
+                    <h4 className="font-semibold mb-3">Serial Settings</h4>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Data Bits</label>
+                        <div className="relative">
+                          <select
+                            className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
+                            style={{
+                              backgroundColor: 'hsl(var(--background))',
+                              borderColor: 'hsl(var(--border))',
+                              color: 'hsl(var(--foreground))',
+                              colorScheme: darkMode ? 'dark' : 'light'
+                            }}
+                            value={dataBits} onChange={e => setDataBits(Number(e.target.value))} disabled={connected}>
+                            {[5, 6, 7, 8].map(n => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Stop Bits</label>
+                        <div className="relative">
+                          <select
+                            className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
+                            style={{
+                              backgroundColor: 'hsl(var(--background))',
+                              borderColor: 'hsl(var(--border))',
+                              color: 'hsl(var(--foreground))',
+                              colorScheme: darkMode ? 'dark' : 'light'
+                            }}
+                            value={stopBits} onChange={e => setStopBits(Number(e.target.value))} disabled={connected}>
+                            {[1, 2].map(n => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Parity</label>
+                        <div className="relative">
+                          <select
+                            className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
+                            style={{
+                              backgroundColor: 'hsl(var(--background))',
+                              borderColor: 'hsl(var(--border))',
+                              color: 'hsl(var(--foreground))',
+                              colorScheme: darkMode ? 'dark' : 'light'
+                            }}
+                            value={parity} onChange={e => setParity(e.target.value)} disabled={connected}>
+                            {["None", "Odd", "Even"].map(n => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-xs block mb-1" style={{ color: 'hsl(var(--muted-foreground))' }}>Flow Control</label>
+                        <div className="relative">
+                          <select
+                            className="w-full rounded px-2 py-1 text-sm outline-none border cursor-pointer appearance-none pr-8"
+                            style={{
+                              backgroundColor: 'hsl(var(--background))',
+                              borderColor: 'hsl(var(--border))',
+                              color: 'hsl(var(--foreground))',
+                              colorScheme: darkMode ? 'dark' : 'light'
+                            }}
+                            value={flowControl} onChange={e => setFlowControl(e.target.value)} disabled={connected}>
+                            {["None", "Software", "Hardware"].map(n => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowSettings(false)}
+                      className="mt-3 w-full bg-secondary hover:bg-secondary/80 rounded py-1 text-sm"
+                    >
+                      Close
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>
+          ) : connectionType === 'TCP' ? (
+            <>
+              <input
+                type="text"
+                className="w-32 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                placeholder="192.168.1.100"
+                value={tcpHost}
+                onChange={(e) => setTcpHost(e.target.value)}
+                disabled={connected}
+              />
+              <span className="text-zinc-500 font-bold">:</span>
+              <input
+                type="number"
+                className="w-20 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500 no-spinner"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                placeholder="8080"
+                value={tcpPort}
+                onChange={(e) => setTcpPort(Number(e.target.value))}
+                disabled={connected}
+              />
+            </>
+          ) : (
+            <>
+              <input
+                type="text"
+                className="w-32 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                placeholder="pi@192.168.1.100"
+                title="SSH Username"
+                value={sshUsername}
+                onChange={(e) => setSshUsername(e.target.value)}
+                disabled={connected}
+              />
+              <span className="text-zinc-500 font-bold">@</span>
+              <input
+                type="text"
+                className="w-32 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                placeholder="Host"
+                title="SSH Host URL or IP"
+                value={sshHost}
+                onChange={(e) => setSshHost(e.target.value)}
+                disabled={connected}
+              />
+              <span className="text-zinc-500 font-bold">:</span>
+              <input
+                type="number"
+                className="w-16 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500 no-spinner"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                placeholder="22"
+                title="SSH Port"
+                value={sshPort}
+                onChange={(e) => setSshPort(Number(e.target.value))}
+                disabled={connected}
+              />
+              <span className="text-zinc-500 font-bold"></span>
+              <input
+                type="password"
+                className="w-28 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                placeholder="Password"
+                title="SSH Password (not saved to .plant)"
+                value={sshPassword}
+                onChange={(e) => setSshPassword(e.target.value)}
+                disabled={connected}
+              />
+            </>
+          )}
 
           {!connected ? (
             <button
-              className="bg-green-600 hover:bg-green-700 text-white rounded px-3 py-1 text-sm font-medium"
-              onClick={() => handleConnect(selectedPort, baudRate, { dataBits, parity, stopBits, flowControl })}
-              disabled={!selectedPort}
+              className={`text-white rounded px-3 py-1 text-sm font-medium ${isConnecting ? 'bg-zinc-600 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
+              onClick={handleConnect}
+              disabled={isConnecting || (connectionType === 'Serial' && !selectedPort)}
             >
-              Open Port
+              {isConnecting ? 'Connecting...' : 'Connect'}
             </button>
           ) : (
             <button
               className="bg-red-600 hover:bg-red-700 text-white rounded px-3 py-1 text-sm font-medium"
               onClick={handleDisconnect}
             >
-              Close Port
+              Disconnect
             </button>
           )}
+
           <div className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
         </div>
       </header>
@@ -576,7 +706,11 @@ function App() {
             style={{ width: sidebarWidth, minWidth: 200, maxWidth: 600 }}
           >
             <ProjectSidebar
-              project={project}
+              project={{
+                ...project,
+                tcp_config: connectionType === 'TCP' ? { host: tcpHost, port: tcpPort } : undefined,
+                ssh_config: connectionType === 'SSH' ? { host: sshHost, port: sshPort, username: sshUsername } : undefined,
+              }}
               onUpdate={setProject}
               onSend={handleSend}
               onEditSequence={setEditingSeq}
@@ -623,7 +757,21 @@ function App() {
               onClearData={() => setChartData([])}
             />
 
-            <Terminal logs={logs} onClear={() => setLogs([])} />
+            <Terminal
+              logs={logs}
+              onClear={() => setLogs([])}
+              onSendCommand={connectionType === 'SSH' ? async (cmd) => {
+                try {
+                  const bytes = Array.from(new TextEncoder().encode(cmd));
+                  await invoke("send_ssh_data", { data: bytes });
+                  // We don't push to incomingQueue directly here, because SSH usually echoes back
+                  // what you type via the read channel itself. If we find it feels disconnected, we
+                  // can add an artificial local echo later.
+                } catch (e) {
+                  console.error("Failed to send SSH command:", e);
+                }
+              } : undefined}
+            />
           </div>
         </div>
       </main>

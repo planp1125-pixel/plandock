@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { clsx } from 'clsx';
-import { Download, Trash2, Search, X, FileText, Lock } from 'lucide-react';
+import { Download, Trash2, Search, X, FileText } from 'lucide-react';
 import { save, message } from '@tauri-apps/plugin-dialog';
 import { writeTextFile } from '@tauri-apps/plugin-fs';
 import { invoke } from '@tauri-apps/api/core';
@@ -24,16 +24,20 @@ export interface LogEntry {
 interface Props {
     logs: LogEntry[];
     onClear: () => void;
+    onSendCommand?: (cmd: string) => void;
 }
 
 type TimestampMode = "none" | "each" | "line";
 
-export function Terminal({ logs, onClear }: Props) {
+export function Terminal({ logs, onClear, onSendCommand }: Props) {
     const bottomRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
+    const cmdInputRef = useRef<HTMLInputElement>(null);
+    const [cmdText, setCmdText] = useState("");
     const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Binary" | "Decimal">("Ascii");
     const [autoScroll, setAutoScroll] = useState(true);
     const [timestampMode, setTimestampMode] = useState<TimestampMode>("each");
+    const [stripAnsi, setStripAnsi] = useState(true); // Default to clean text
 
     // Pro tier status
     const { isPro } = useLicense();
@@ -54,6 +58,8 @@ export function Terminal({ logs, onClear }: Props) {
     const [exportDec, setExportDec] = useState(false);
     const [showExportOptions, setShowExportOptions] = useState(false);
     const [showLogOptions, setShowLogOptions] = useState(false);
+    const [logFormat, setLogFormat] = useState<'ascii' | 'hex' | 'both'>('both');
+    const lastLoggedIndexRef = useRef(0);
 
     const handleStartLogging = async () => {
         try {
@@ -68,7 +74,13 @@ export function Terminal({ logs, onClear }: Props) {
             if (path) {
                 // Determine format from selected checkboxes
                 const format = exportAscii ? 'ascii' : exportHex ? 'hex' : 'both';
-                await invoke('start_logging', { path, format });
+                setLogFormat(format as 'ascii' | 'hex' | 'both');
+
+                // Write header
+                const header = `=== Plan Terminal Log Started: ${new Date().toLocaleString()} ===\n`;
+                await invoke('write_file_direct', { path, content: header });
+
+                lastLoggedIndexRef.current = logs.length; // Start from current position
                 setIsLogging(true);
                 setLogPath(path);
                 setShowLogOptions(false);
@@ -82,14 +94,100 @@ export function Terminal({ logs, onClear }: Props) {
 
     const handleStopLogging = async () => {
         try {
-            await invoke('stop_logging');
+            if (logPath) {
+                const footer = `=== Plan Terminal Log Ended: ${new Date().toLocaleString()} ===\n`;
+                await invoke('append_to_file', { path: logPath, content: footer });
+            }
             setIsLogging(false);
             await message(`Log saved: ${logPath}`, { title: 'Logging Stopped', kind: 'info' });
             setLogPath(null);
         } catch (error) {
             console.error('Failed to stop logging:', error);
+            setIsLogging(false);
+            setLogPath(null);
         }
     };
+
+    // ANSI Sequence Stripper algorithm
+    const filterAnsi = useCallback((bytes: number[]): number[] => {
+        let out: number[] = [];
+        let inAnsi = false;
+        let inOsc = false;
+
+        for (let i = 0; i < bytes.length; i++) {
+            const b = bytes[i];
+
+            if (inAnsi) {
+                // ANSI escape sequences (CSI) end with a letter
+                if ((b >= 65 && b <= 90) || (b >= 97 && b <= 122)) {
+                    inAnsi = false;
+                }
+                continue;
+            }
+            if (inOsc) {
+                // OSC ends with BEL (7) or ST (ESC \)
+                if (b === 7) {
+                    inOsc = false;
+                } else if (b === 27 && i + 1 < bytes.length && bytes[i + 1] === 92) {
+                    inOsc = false;
+                    i++; // skip the backslash
+                }
+                continue;
+            }
+
+            // Look ahead for escape sequence start
+            if (b === 27 && i + 1 < bytes.length) {
+                const next = bytes[i + 1];
+                if (next === 91) { // '[' - CSI
+                    inAnsi = true;
+                    i++;
+                    continue;
+                } else if (next === 93) { // ']' - OSC
+                    inOsc = true;
+                    i++;
+                    continue;
+                } else if (next === 40 || next === 41) { // '(' or ')' - G0/G1 charset
+                    i += 2; // skip ESC ( B
+                    continue;
+                } else if (next === 61 || next === 62) { // '=' or '>' - Application keypad
+                    i++;
+                    continue;
+                }
+            }
+
+            out.push(b);
+        }
+        return out;
+    }, []);
+
+    // Real-time log writing — appends new entries as they arrive
+    useEffect(() => {
+        if (!isLogging || !logPath || logs.length <= lastLoggedIndexRef.current) return;
+
+        const newEntries = logs.slice(lastLoggedIndexRef.current);
+        lastLoggedIndexRef.current = logs.length;
+
+        const lines = newEntries.map(l => {
+            const d = new Date(l.timestamp);
+            const ts = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+
+            const bytesToProcess = stripAnsi ? filterAnsi(l.data) : l.data;
+
+            const hex = bytesToProcess.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+            const ascii = bytesToProcess.map(b => {
+                if (b < 32 || b === 127) return `<${CONTROL_CHAR_NAMES[b] || '??'}>`;
+                return String.fromCharCode(b);
+            }).join('');
+
+            if (logFormat === 'ascii') return `[${ts}] [${l.direction}] ${ascii}`;
+            if (logFormat === 'hex') return `[${ts}] [${l.direction}] ${hex}`;
+            return `[${ts}] [${l.direction}] HEX: ${hex} | ASCII: ${ascii}`;
+        }).join('\n') + '\n';
+
+        invoke('append_to_file', { path: logPath, content: lines }).catch(e => {
+            console.error('Log write failed:', e);
+        });
+    }, [logs.length, isLogging, logPath, logFormat]);
 
     const [timestampGap, setTimestampGap] = useState<number>(() => {
         return Number(localStorage.getItem('terminal-ts-gap') || '100');
@@ -245,8 +343,10 @@ export function Terminal({ logs, onClear }: Props) {
         const tsString = formatTimestamp(l.timestamp);
         const prefix = timestampMode !== 'none' ? `[${tsString}] ` : '';
 
-        const hex = l.data.map(b => b.toString(16).padStart(2, '0')).join(' ');
-        const ascii = l.data.map(b => {
+        const bytesToProcess = stripAnsi ? filterAnsi(l.data) : l.data;
+
+        const hex = bytesToProcess.map(b => b.toString(16).padStart(2, '0')).join(' ');
+        const ascii = bytesToProcess.map(b => {
             if (b < 32 || b === 127) return `<${CONTROL_CHAR_NAMES[b] || "??"}>`;
             return String.fromCharCode(b);
         }).join('');
@@ -395,6 +495,10 @@ export function Terminal({ logs, onClear }: Props) {
                     </div>
                 </div>
                 <div className="flex gap-2 items-center">
+                    <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none" title="Clean Text (Strip ANSI Sequences)">
+                        <input type="checkbox" checked={stripAnsi} onChange={e => setStripAnsi(e.target.checked)} />
+                        Clean Text
+                    </label>
                     <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none">
                         <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
                         Auto-scroll
@@ -402,11 +506,10 @@ export function Terminal({ logs, onClear }: Props) {
                     <button onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50); }} className={clsx("p-1 hover:text-white", searchOpen && "text-yellow-400")} title="Search (Ctrl+F)">
                         <Search className="w-4 h-4" />
                     </button>
-                    {/* Real-time Log Button - Pro Only */}
+                    {/* Real-time Log Button */}
                     <div className="relative">
                         <button
                             onClick={() => {
-                                if (!isPro) return;
                                 if (isLogging) {
                                     handleStopLogging();
                                 } else {
@@ -415,16 +518,14 @@ export function Terminal({ logs, onClear }: Props) {
                             }}
                             className={clsx(
                                 "p-1 flex items-center gap-1 text-xs rounded",
-                                !isPro ? "text-zinc-600 cursor-not-allowed" :
-                                    isLogging ? "text-red-400 bg-red-900/30 animate-pulse" : "hover:text-white"
+                                isLogging ? "text-red-400 bg-red-900/30 animate-pulse" : "hover:text-white"
                             )}
-                            title={!isPro ? "Real-time Logging (Pro Feature)" : isLogging ? "Stop Logging" : "Start Logging to File"}
+                            title={isLogging ? "Stop Logging" : "Start Logging to File"}
                         >
-                            {!isPro ? <Lock className="w-3 h-3" /> : <FileText className="w-4 h-4" />}
+                            <FileText className="w-4 h-4" />
                             {isLogging && <span className="text-[10px]">LOG</span>}
-                            {!isPro && <span className="text-[10px]">PRO</span>}
                         </button>
-                        {showLogOptions && !isLogging && isPro && (
+                        {showLogOptions && !isLogging && (
                             <div className="absolute right-0 top-full mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 p-2 w-48">
                                 <div className="text-[10px] text-zinc-400 font-semibold mb-1 uppercase">Log Format</div>
                                 <div className="text-[10px] text-zinc-500 mb-2">Select format. Default = ASCII + HEX combined.</div>
@@ -508,7 +609,7 @@ export function Terminal({ logs, onClear }: Props) {
                     {searchQuery && (
                         <span className="text-xs text-zinc-500">
                             {logs.filter(log => {
-                                const text = getSearchableText(log.data);
+                                const text = getSearchableText(stripAnsi ? filterAnsi(log.data) : log.data);
                                 return text.toLowerCase().includes(searchQuery.toLowerCase());
                             }).length} matches
                         </span>
@@ -523,9 +624,13 @@ export function Terminal({ logs, onClear }: Props) {
             <div className="flex-1 overflow-y-auto p-4 space-y-1">
                 {/* Windowed rendering: only show last 500 logs in DOM, but keeps 10k in memory */}
                 {logs.slice(-500)
+                    .map(log => {
+                        const processedData = stripAnsi ? filterAnsi(log.data) : log.data;
+                        return { ...log, processedData };
+                    })
                     .filter(log => {
                         if (!searchQuery || !filterMode) return true;
-                        const text = getSearchableText(log.data);
+                        const text = getSearchableText(log.processedData);
                         return text.toLowerCase().includes(searchQuery.toLowerCase());
                     })
                     .map(log => (
@@ -537,12 +642,46 @@ export function Terminal({ logs, onClear }: Props) {
                                 {log.direction}
                             </span>
                             <span className={clsx("break-all whitespace-pre-wrap", log.direction === 'TX' ? "text-cyan-400" : "text-yellow-400")}>
-                                {renderData(log.data, searchQuery || undefined)}
+                                {renderData(log.processedData, searchQuery || undefined)}
                             </span>
                         </div>
                     ))}
                 <div ref={bottomRef} />
             </div>
+
+            {/* Interactive Command Input Bar (SSH Mode) */}
+            {onSendCommand && (
+                <div className="flex bg-zinc-900 border-t border-zinc-700/50 p-2 gap-2 shadow-inner">
+                    <span className="text-green-500 font-mono self-center text-sm ml-2">$&gt;</span>
+                    <input
+                        ref={cmdInputRef}
+                        type="text"
+                        className="flex-1 bg-transparent border-none outline-none text-cyan-400 font-mono text-sm placeholder:text-zinc-600 focus:ring-0"
+                        placeholder="Type SSH command here and press Enter (e.g., ls -la)"
+                        value={cmdText}
+                        onChange={e => setCmdText(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter') {
+                                if (cmdText.trim()) {
+                                    onSendCommand(cmdText + '\n');
+                                    setCmdText("");
+                                }
+                            }
+                        }}
+                    />
+                    <button
+                        className="bg-zinc-700 hover:bg-zinc-600 text-xs px-3 py-1 rounded text-white"
+                        onClick={() => {
+                            if (cmdText.trim()) {
+                                onSendCommand(cmdText + '\n');
+                                setCmdText("");
+                            }
+                        }}
+                    >
+                        Send
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

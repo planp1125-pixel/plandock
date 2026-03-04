@@ -1,11 +1,15 @@
 mod license;
 mod project_manager;
+mod tcp_manager;
 mod serial_manager;
+mod ssh_manager; // Added ssh_manager module
 use license::{LicenseManager, LicenseStatus};
 use project_manager::{load_project, save_project, import_ptp_file, Project};
 use serial_manager::{PortInfo, Reaction, SerialConfig, SerialManager};
+use tcp_manager::TcpManager;
+use ssh_manager::SshManager; // Added SshManager import
 use std::sync::Arc;
-use tauri::{Manager, State};
+use tauri::{Manager, State, AppHandle};
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -118,6 +122,91 @@ fn write_file_direct(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| format!("Failed to write {}: {}", path, e))
 }
 
+/// Append text to a file (for real-time logging)
+#[tauri::command]
+fn append_to_file(path: String, content: String) -> Result<(), String> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| format!("Failed to append to {}: {}", path, e))
+}
+
+#[tauri::command]
+async fn connect_tcp(
+    tcp_manager: State<'_, Arc<TcpManager>>,
+    app: AppHandle,
+    host: String,
+    port: u16,
+) -> Result<(), String> {
+    // Execute synchronous connect inside a spawn_blocking to fully decouple from main thread, 
+    // though `async fn` in Tauri usually offloads, spawn_blocking guarantees it avoids freezing.
+    let host = host.clone();
+    let manager = tcp_manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        manager.connect(app, &host, port)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn disconnect_tcp(tcp_manager: State<'_, Arc<TcpManager>>) {
+    tcp_manager.disconnect();
+}
+
+#[tauri::command]
+fn send_tcp_data(tcp_manager: State<'_, Arc<TcpManager>>, data: Vec<u8>) -> Result<(), String> {
+    tcp_manager.write_data(data)
+}
+
+#[tauri::command]
+fn is_tcp_connected(tcp_manager: State<'_, Arc<TcpManager>>) -> bool {
+    tcp_manager.is_connected()
+}
+
+// ==========================================
+// SSH Commands
+// ==========================================
+
+#[tauri::command]
+async fn connect_ssh(
+    ssh_manager: State<'_, Arc<SshManager>>,
+    app: AppHandle,
+    host: String,
+    port: u16,
+    user: String,
+    pass: String,
+) -> Result<(), String> {
+    let host = host.clone();
+    let user = user.clone();
+    let pass = pass.clone();
+    let manager = ssh_manager.inner().clone();
+    
+    tauri::async_runtime::spawn_blocking(move || {
+        manager.connect(app, &host, port, &user, &pass)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn disconnect_ssh(ssh_manager: State<'_, Arc<SshManager>>) {
+    ssh_manager.disconnect();
+}
+
+#[tauri::command]
+fn send_ssh_data(
+    ssh_manager: State<'_, Arc<SshManager>>,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    ssh_manager.write_data(data)
+}
+
+#[tauri::command]
+fn is_ssh_connected(ssh_manager: State<'_, Arc<SshManager>>) -> bool {
+    ssh_manager.is_connected()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -132,6 +221,8 @@ pub fn run() {
             Ok(())
         })
         .manage(Arc::new(SerialManager::new()))
+        .manage(Arc::new(TcpManager::new()))
+        .manage(Arc::new(SshManager::new())) // Added SshManager instantiation
         .invoke_handler(tauri::generate_handler![
             greet,
             list_serial_ports,
@@ -150,6 +241,15 @@ pub fn run() {
             stop_logging,
             is_logging,
             write_file_direct,
+            append_to_file,
+            connect_tcp,
+            disconnect_tcp,
+            send_tcp_data,
+            is_tcp_connected,
+            connect_ssh, // Added SSH command
+            disconnect_ssh, // Added SSH command
+            send_ssh_data, // Added SSH command
+            is_ssh_connected, // Added SSH command
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

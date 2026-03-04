@@ -31,9 +31,22 @@ export interface Reaction {
     view_mode: "Hex" | "Ascii" | "Decimal" | "Binary";
 }
 
+export interface TcpConfig {
+    host: string;
+    port: number;
+}
+
+export interface SshConfig {
+    host: string;
+    port: number;
+    username: string; // Password excluded intentionally
+}
+
 export interface Project {
     name: string;
     send_sequences: Sequence[];
     reactions: Reaction[];
     serial_config?: SerialConfig;
+    tcp_config?: TcpConfig;
+    ssh_config?: SshConfig;
 }

@@ -24,11 +24,26 @@ pub struct Reaction {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TcpConfig {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Project {
     pub name: String,
     pub send_sequences: Vec<Sequence>,
     pub reactions: Vec<Reaction>,
     pub serial_config: Option<SerialConfig>,
+    pub tcp_config: Option<TcpConfig>,
+    pub ssh_config: Option<SshConfig>,
 }
 
 impl Project {
@@ -38,6 +53,8 @@ impl Project {
             send_sequences: vec![],
             reactions: vec![],
             serial_config: None,
+            tcp_config: None,
+            ssh_config: None,
         }
     }
 }
@@ -451,5 +468,7 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
         send_sequences: sequences,
         reactions,
         serial_config,
+        tcp_config: None,
+        ssh_config: None,
     })
 }

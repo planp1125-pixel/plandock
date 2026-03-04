@@ -1,6 +1,6 @@
 [package]
 name = "docklite"
-version = "0.3.1"
+version = "0.3.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -31,4 +31,5 @@ sha2 = "0.10"
 reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features = false }
 hostname = "0.3"
 whoami = "1.4"
+ssh2 = "0.9.5"
 
