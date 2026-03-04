@@ -47,6 +47,7 @@ pub struct Project {
 }
 
 impl Project {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             name: "Plan Terminal".to_string(),

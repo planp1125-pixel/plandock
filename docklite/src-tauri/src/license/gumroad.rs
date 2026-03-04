@@ -21,6 +21,7 @@ const GUMROAD_VERIFY_URL: &str = "https://api.gumroad.com/v2/licenses/verify";
 
 // Gumroad API response structures
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 struct GumroadVerifyResponse {
     success: bool,
     #[serde(default)]
@@ -31,6 +32,7 @@ struct GumroadVerifyResponse {
 }
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 struct GumroadPurchase {
     #[serde(default)]
     email: Option<String>,

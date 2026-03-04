@@ -91,5 +91,6 @@ jobs:
           releaseDraft: true
           prerelease: false
           projectPath: docklite
+          args: --bundles app,dmg
           # Note: MacOS builds require valid signing identity for full distribution.
           # If not configured, it will build unsign/ad-hoc.

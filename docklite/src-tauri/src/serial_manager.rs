@@ -304,7 +304,7 @@ impl SerialManager {
         let write_port_clone = self.write_port.clone();
         let is_reading = self.is_reading.clone();
         let reactions_clone = self.reactions.clone();
-        let packet_timeout_clone = self.packet_timeout.clone();
+        let _packet_timeout_clone = self.packet_timeout.clone();
         let log_file_clone = self.log_file.clone();
         let log_format_clone = self.log_format.clone();
 
