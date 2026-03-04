@@ -31,7 +31,7 @@ type TimestampMode = "none" | "each" | "line";
 export function Terminal({ logs, onClear }: Props) {
     const bottomRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
-    const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Binary">("Ascii");
+    const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Binary" | "Decimal">("Ascii");
     const [autoScroll, setAutoScroll] = useState(true);
     const [timestampMode, setTimestampMode] = useState<TimestampMode>("each");
 
@@ -153,6 +153,9 @@ export function Terminal({ logs, onClear }: Props) {
         } else if (viewMode === 'Binary') {
             const binStr = bytes.map(b => b.toString(2).padStart(8, '0')).join(' ');
             return highlight ? highlightMatches(binStr, highlight, 'bin') : binStr;
+        } else if (viewMode === 'Decimal') {
+            const decStr = bytes.map(b => b.toString(10)).join(' ');
+            return highlight ? highlightMatches(decStr, highlight, 'dec') : decStr;
         } else {
             const elements: any[] = [];
             let currentString = "";
@@ -226,6 +229,9 @@ export function Terminal({ logs, onClear }: Props) {
 
     // Plain text version for searching (works in both modes)
     const getSearchableText = (bytes: number[]): string => {
+        if (viewMode === 'Hex') return bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+        if (viewMode === 'Binary') return bytes.map(b => b.toString(2).padStart(8, '0')).join(' ');
+        if (viewMode === 'Decimal') return bytes.map(b => b.toString(10)).join(' ');
         return bytes.map(b => {
             if (b < 32 || b === 127) {
                 return `<${CONTROL_CHAR_NAMES[b] || "??"}>`;
@@ -334,6 +340,10 @@ export function Terminal({ logs, onClear }: Props) {
                             className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Hex' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
                             onClick={() => setViewMode('Hex')}
                         >HEX</button>
+                        <button
+                            className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Decimal' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
+                            onClick={() => setViewMode('Decimal')}
+                        >DEC</button>
                         <button
                             className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Binary' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
                             onClick={() => setViewMode('Binary')}
