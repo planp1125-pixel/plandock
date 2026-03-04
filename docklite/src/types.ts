@@ -16,7 +16,7 @@ export interface Sequence {
     id: string;
     name: string;
     data: string; // Hex string for easy editing
-    view_mode: "Hex" | "Ascii" | "Decimal";
+    view_mode: "Hex" | "Ascii" | "Decimal" | "Binary";
     hotkey?: string;
     periodic_interval?: number; // Interval in ms for periodic sending
     periodic_enabled?: boolean; // Whether periodic sending is active
@@ -28,7 +28,7 @@ export interface Reaction {
     trigger_data: string;
     response_sequence_id: string;
     enabled: boolean;
-    view_mode: "Hex" | "Ascii" | "Decimal";
+    view_mode: "Hex" | "Ascii" | "Decimal" | "Binary";
 }
 
 export interface Project {

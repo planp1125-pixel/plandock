@@ -10,7 +10,7 @@ export function parseInput(input: string): string {
         .replace(/<(\d+)>/g, (_, code) => String.fromCharCode(parseInt(code, 10)));
 }
 
-export function parseData(data: string, mode: "Hex" | "Ascii" | "Decimal" | undefined): number[] {
+export function parseData(data: string, mode: "Hex" | "Ascii" | "Decimal" | "Binary" | undefined): number[] {
     let bytes: number[] = [];
     if (!data) return bytes;
 
@@ -27,6 +27,14 @@ export function parseData(data: string, mode: "Hex" | "Ascii" | "Decimal" | unde
                 bytes.push(val);
             }
         }
+    } else if (mode === 'Binary') {
+        const parts = data.trim().split(/\s+/).filter(p => p);
+        for (const part of parts) {
+            const val = parseInt(part, 2);
+            if (!isNaN(val) && val >= 0 && val <= 255) {
+                bytes.push(val);
+            }
+        }
     } else {
         const parsed = parseInput(data);
         for (let i = 0; i < parsed.length; i++) {
@@ -38,4 +46,8 @@ export function parseData(data: string, mode: "Hex" | "Ascii" | "Decimal" | unde
 
 export function bytesToHex(bytes: number[]): string {
     return bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+}
+
+export function bytesToBin(bytes: number[]): string {
+    return bytes.map(b => b.toString(2).padStart(8, '0')).join(' ');
 }

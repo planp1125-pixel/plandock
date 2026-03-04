@@ -77,6 +77,11 @@ impl SerialManager {
             _ => LogFormat::Both,
         };
 
+        eprintln!(
+            "[LOG] Starting logging to: {} with format: {:?}",
+            path, log_format
+        );
+
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -101,6 +106,22 @@ impl SerialManager {
 
         let mut lfile = self.log_file.lock().unwrap();
         *lfile = Some(writer);
+
+        // Write a test marker to confirm logging pipeline is working
+        if let Some(ref mut w) = *lfile {
+            let test_line = format!(
+                "[{}] --- Logging active, format: {:?}, waiting for data... ---\n",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                log_format
+            );
+            let _ = w.write_all(test_line.as_bytes());
+            let _ = w.flush();
+        }
+
+        eprintln!(
+            "[LOG] Logging started successfully. log_file is Some: {}",
+            lfile.is_some()
+        );
 
         Ok(())
     }
@@ -131,7 +152,13 @@ impl SerialManager {
         data: &[u8],
         direction: &str,
     ) {
-        let mut lfile = log_file.lock().unwrap();
+        let mut lfile = match log_file.lock() {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[LOG] Failed to lock log_file: {}", e);
+                return;
+            }
+        };
         if let Some(ref mut writer) = *lfile {
             let format = *log_format.lock().unwrap();
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.6f");
@@ -173,8 +200,12 @@ impl SerialManager {
             };
 
             let line = format!("[{}] {} {}\n", timestamp, direction, formatted_data);
-            let _ = writer.write_all(line.as_bytes());
-            let _ = writer.flush();
+            if let Err(e) = writer.write_all(line.as_bytes()) {
+                eprintln!("[LOG] write_all failed: {}", e);
+            }
+            if let Err(e) = writer.flush() {
+                eprintln!("[LOG] flush failed: {}", e);
+            }
         }
     }
 

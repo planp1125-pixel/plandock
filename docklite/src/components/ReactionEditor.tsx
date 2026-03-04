@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Reaction, Sequence } from "../types";
 import { X, Save, ChevronDown } from "lucide-react";
-import { parseData, bytesToHex } from "../utils";
+import { parseData, bytesToHex, bytesToBin } from "../utils";
 
 
 interface Props {
@@ -17,7 +17,7 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
     const [triggerData, setTriggerData] = useState(reaction.trigger_data);
     const [responseId, setResponseId] = useState(reaction.response_sequence_id);
     const [enabled, setEnabled] = useState(reaction.enabled);
-    const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Decimal">("Ascii");
+    const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Decimal" | "Binary">("Ascii");
     const [previewMode, setPreviewMode] = useState<'Hex' | 'Decimal'>('Hex');
     const [selectionRange, setSelectionRange] = useState<{ start: number, end: number } | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -135,20 +135,8 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
 
     // Convert data when switching modes
     const convertToAscii = () => {
-        if (viewMode === 'Hex') {
-            const bytes = parseData(triggerData, 'Hex');
-            let ascii = '';
-            for (const byte of bytes) {
-                if (byte === 13) ascii += '<CR>';
-                else if (byte === 10) ascii += '<LF>';
-                else if (byte === 27) ascii += '<ESC>';
-                else if (byte === 0) ascii += '<NUL>';
-                else if (byte < 32 || byte > 126) ascii += `<${byte}>`;
-                else ascii += String.fromCharCode(byte);
-            }
-            setTriggerData(ascii);
-        } else if (viewMode === 'Decimal') {
-            const bytes = parseData(triggerData, 'Decimal');
+        if (viewMode !== 'Ascii') {
+            const bytes = parseData(triggerData, viewMode);
             let ascii = '';
             for (const byte of bytes) {
                 if (byte === 13) ascii += '<CR>';
@@ -173,6 +161,12 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
         const bytes = parseData(triggerData, viewMode);
         setTriggerData(bytes.join(' '));
         setViewMode('Decimal');
+    };
+
+    const convertToBinary = () => {
+        const bin = bytesToBin(parseData(triggerData, viewMode));
+        setTriggerData(bin);
+        setViewMode('Binary');
     };
 
     if (!isOpen) return null;
@@ -223,33 +217,37 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
                                         className={`px-2 py-0.5 rounded ${viewMode === 'Decimal' ? 'bg-background shadow' : ''}`}
                                         onClick={convertToDecimal}
                                     >DEC</button>
+                                    <button
+                                        className={`px-2 py-0.5 rounded ${viewMode === 'Binary' ? 'bg-background shadow' : ''}`}
+                                        onClick={convertToBinary}
+                                    >BIN</button>
                                 </div>
                             </div>
 
                             {/* Toolbar Buttons */}
                             <div className="flex gap-1 flex-wrap mb-2">
                                 <button
-                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<CR>") : insertAtCursor(viewMode === 'Hex' ? " 0D" : " 13")}
+                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<CR>") : insertAtCursor(viewMode === 'Hex' ? " 0D" : viewMode === 'Binary' ? " 00001101" : " 13")}
                                     className="px-2 py-1 bg-secondary hover:bg-secondary/80 rounded text-xs font-mono"
                                     title="Insert Carriage Return"
                                 >+CR</button>
                                 <button
-                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<LF>") : insertAtCursor(viewMode === 'Hex' ? " 0A" : " 10")}
+                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<LF>") : insertAtCursor(viewMode === 'Hex' ? " 0A" : viewMode === 'Binary' ? " 00001010" : " 10")}
                                     className="px-2 py-1 bg-secondary hover:bg-secondary/80 rounded text-xs font-mono"
                                     title="Insert Line Feed"
                                 >+LF</button>
                                 <button
-                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<NUL>") : insertAtCursor(viewMode === 'Hex' ? " 00" : " 0")}
+                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<NUL>") : insertAtCursor(viewMode === 'Hex' ? " 00" : viewMode === 'Binary' ? " 00000000" : " 0")}
                                     className="px-2 py-1 bg-secondary hover:bg-secondary/80 rounded text-xs font-mono"
                                     title="Insert Null"
                                 >+NULL</button>
                                 <button
-                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<CR><LF>") : insertAtCursor(viewMode === 'Hex' ? " 0D 0A" : " 13 10")}
+                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<CR><LF>") : insertAtCursor(viewMode === 'Hex' ? " 0D 0A" : viewMode === 'Binary' ? " 00001101 00001010" : " 13 10")}
                                     className="px-2 py-1 bg-secondary hover:bg-secondary/80 rounded text-xs font-mono"
                                     title="Insert CR+LF"
                                 >+CRLF</button>
                                 <button
-                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<ESC>") : insertAtCursor(viewMode === 'Hex' ? " 1B" : " 27")}
+                                    onClick={() => viewMode === 'Ascii' ? insertAtCursor("<ESC>") : insertAtCursor(viewMode === 'Hex' ? " 1B" : viewMode === 'Binary' ? " 00011011" : " 27")}
                                     className="px-2 py-1 bg-secondary hover:bg-secondary/80 rounded text-xs font-mono"
                                     title="Insert Escape"
                                 >+ESC</button>
@@ -264,10 +262,10 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
                                 onSelect={handleSelect}
                                 onMouseUp={handleSelect}
                                 onKeyUp={handleSelect}
-                                placeholder={viewMode === 'Hex' ? "00 AA BB" : viewMode === 'Decimal' ? "13 10 27" : "Trigger sequence... e.g. OK<CR><LF>"}
+                                placeholder={viewMode === 'Hex' ? "00 AA BB" : viewMode === 'Decimal' ? "13 10 27" : viewMode === 'Binary' ? "01001000 01100101" : "Trigger sequence... e.g. OK<CR><LF>"}
                             />
                             <p className="text-xs text-muted-foreground mt-1">
-                                {viewMode === 'Hex' ? "Space-separated hex bytes" : viewMode === 'Decimal' ? "Space-separated decimal values" : "Select text to highlight bytes →"}
+                                {viewMode === 'Hex' ? "Space-separated hex bytes" : viewMode === 'Decimal' ? "Space-separated decimal values" : viewMode === 'Binary' ? "Space-separated 8-bit binary values" : "Select text to highlight bytes →"}
                             </p>
                         </div>
 

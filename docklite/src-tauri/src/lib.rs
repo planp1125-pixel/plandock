@@ -112,6 +112,12 @@ fn is_logging(state: State<'_, Arc<SerialManager>>) -> bool {
     state.is_logging()
 }
 
+/// Write text to a file directly (bypasses Tauri FS plugin scope for multi-file export)
+#[tauri::command]
+fn write_file_direct(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| format!("Failed to write {}: {}", path, e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -143,6 +149,7 @@ pub fn run() {
             start_logging,
             stop_logging,
             is_logging,
+            write_file_direct,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -31,7 +31,7 @@ type TimestampMode = "none" | "each" | "line";
 export function Terminal({ logs, onClear }: Props) {
     const bottomRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
-    const [viewMode, setViewMode] = useState<"Ascii" | "Hex">("Ascii");
+    const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Binary">("Ascii");
     const [autoScroll, setAutoScroll] = useState(true);
     const [timestampMode, setTimestampMode] = useState<TimestampMode>("each");
 
@@ -47,6 +47,14 @@ export function Terminal({ logs, onClear }: Props) {
     const [isLogging, setIsLogging] = useState(false);
     const [logPath, setLogPath] = useState<string | null>(null);
 
+    // Export / Log format state (shared checkboxes)
+    const [exportAscii, setExportAscii] = useState(false);
+    const [exportHex, setExportHex] = useState(false);
+    const [exportBin, setExportBin] = useState(false);
+    const [exportDec, setExportDec] = useState(false);
+    const [showExportOptions, setShowExportOptions] = useState(false);
+    const [showLogOptions, setShowLogOptions] = useState(false);
+
     const handleStartLogging = async () => {
         try {
             const path = await save({
@@ -58,9 +66,12 @@ export function Terminal({ logs, onClear }: Props) {
             });
 
             if (path) {
-                await invoke('start_logging', { path, format: 'both' });
+                // Determine format from selected checkboxes
+                const format = exportAscii ? 'ascii' : exportHex ? 'hex' : 'both';
+                await invoke('start_logging', { path, format });
                 setIsLogging(true);
                 setLogPath(path);
+                setShowLogOptions(false);
                 await message(`Logging started: ${path}`, { title: 'Logging Active', kind: 'info' });
             }
         } catch (error) {
@@ -139,6 +150,9 @@ export function Terminal({ logs, onClear }: Props) {
         if (viewMode === 'Hex') {
             const hexStr = bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
             return highlight ? highlightMatches(hexStr, highlight, 'hex') : hexStr;
+        } else if (viewMode === 'Binary') {
+            const binStr = bytes.map(b => b.toString(2).padStart(8, '0')).join(' ');
+            return highlight ? highlightMatches(binStr, highlight, 'bin') : binStr;
         } else {
             const elements: any[] = [];
             let currentString = "";
@@ -220,40 +234,85 @@ export function Terminal({ logs, onClear }: Props) {
         }).join('');
     };
 
+    // Helper formatters for export
+    const formatLogLine = (l: LogEntry, format: 'ascii' | 'hex' | 'bin' | 'dec' | 'combined') => {
+        const tsString = formatTimestamp(l.timestamp);
+        const prefix = timestampMode !== 'none' ? `[${tsString}] ` : '';
+
+        const hex = l.data.map(b => b.toString(16).padStart(2, '0')).join(' ');
+        const ascii = l.data.map(b => {
+            if (b < 32 || b === 127) return `<${CONTROL_CHAR_NAMES[b] || "??"}>`;
+            return String.fromCharCode(b);
+        }).join('');
+        const bin = l.data.map(b => b.toString(2).padStart(8, '0')).join(' ');
+
+        switch (format) {
+            case 'ascii': return `${prefix}[${l.direction}] ${ascii}`;
+            case 'hex': return `${prefix}[${l.direction}] ${hex}`;
+            case 'bin': return `${prefix}[${l.direction}] ${bin}`;
+            case 'dec': return `${prefix}[${l.direction}] ${l.data.join(' ')}`;
+            default: return `${prefix}[${l.direction}] HEX: ${hex} | ASCII: ${ascii}`;
+        }
+    };
+
     const handleExport = async () => {
         try {
-            // Free users limited to last 100 lines, Pro users get all
             const exportLogs = isPro ? logs : logs.slice(-FREE_LIMITS.MAX_EXPORT_LINES);
             const limitNotice = !isPro && logs.length > FREE_LIMITS.MAX_EXPORT_LINES
                 ? `\n\n--- FREE VERSION: Only last ${FREE_LIMITS.MAX_EXPORT_LINES} entries exported. Upgrade to Pro for unlimited export. ---\n`
                 : '';
 
-            const text = exportLogs.map(l => {
-                // Use the same format for export
-                const tsString = formatTimestamp(l.timestamp);
-                const hex = l.data.map(b => b.toString(16).padStart(2, '0')).join(' ');
-                const ascii = l.data.map(b => {
-                    if (b < 32 || b === 127) {
-                        return `<${CONTROL_CHAR_NAMES[b] || "??"}>`;
-                    }
-                    return String.fromCharCode(b);
-                }).join('');
+            const anyFormatSelected = exportAscii || exportHex || exportBin || exportDec;
 
-                const prefix = timestampMode !== 'none' ? `[${tsString}] ` : '';
-                return `${prefix}[${l.direction}] HEX: ${hex} | ASCII: ${ascii}`;
-            }).join('\n') + limitNotice;
+            if (anyFormatSelected) {
+                // Multi-file export: one file per selected format
+                const path = await save({
+                    filters: [{ name: 'Log Files', extensions: ['log', 'txt'] }],
+                    defaultPath: `plan_terminal_log_${Date.now()}.log`
+                });
+                if (!path) return;
 
-            const path = await save({
-                filters: [{
-                    name: 'Text Files',
-                    extensions: ['txt']
-                }],
-                defaultPath: `plan_terminal_log_${Date.now()}.txt`
-            });
+                const basePath = path.replace(/\.(log|txt)$/, '');
+                const ext = path.match(/\.(log|txt)$/)?.[0] || '.log';
+                const savedFiles: string[] = [];
 
-            if (path) {
-                await writeTextFile(path, text);
-                await message('Log saved successfully', { title: 'Success', kind: 'info' });
+                if (exportAscii) {
+                    const text = exportLogs.map(l => formatLogLine(l, 'ascii')).join('\n') + limitNotice;
+                    const filePath = `${basePath}_ascii${ext}`;
+                    await invoke('write_file_direct', { path: filePath, content: text });
+                    savedFiles.push('ASCII');
+                }
+                if (exportHex) {
+                    const text = exportLogs.map(l => formatLogLine(l, 'hex')).join('\n') + limitNotice;
+                    const filePath = `${basePath}_hex${ext}`;
+                    await invoke('write_file_direct', { path: filePath, content: text });
+                    savedFiles.push('HEX');
+                }
+                if (exportBin) {
+                    const text = exportLogs.map(l => formatLogLine(l, 'bin')).join('\n') + limitNotice;
+                    const filePath = `${basePath}_bin${ext}`;
+                    await invoke('write_file_direct', { path: filePath, content: text });
+                    savedFiles.push('BIN');
+                }
+                if (exportDec) {
+                    const text = exportLogs.map(l => formatLogLine(l, 'dec')).join('\n') + limitNotice;
+                    const filePath = `${basePath}_dec${ext}`;
+                    await invoke('write_file_direct', { path: filePath, content: text });
+                    savedFiles.push('DEC');
+                }
+
+                await message(`Saved ${savedFiles.join(', ')} logs as separate files`, { title: 'Export Complete', kind: 'info' });
+            } else {
+                // Default combined export
+                const text = exportLogs.map(l => formatLogLine(l, 'combined')).join('\n') + limitNotice;
+                const path = await save({
+                    filters: [{ name: 'Text Files', extensions: ['txt'] }],
+                    defaultPath: `plan_terminal_log_${Date.now()}.txt`
+                });
+                if (path) {
+                    await writeTextFile(path, text);
+                    await message('Log saved successfully', { title: 'Success', kind: 'info' });
+                }
             }
         } catch (error) {
             console.error('Failed to export logs:', error);
@@ -275,6 +334,10 @@ export function Terminal({ logs, onClear }: Props) {
                             className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Hex' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
                             onClick={() => setViewMode('Hex')}
                         >HEX</button>
+                        <button
+                            className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Binary' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
+                            onClick={() => setViewMode('Binary')}
+                        >BIN</button>
                     </div>
 
                     <div className="border-l border-zinc-700 mx-1" />
@@ -330,22 +393,86 @@ export function Terminal({ logs, onClear }: Props) {
                         <Search className="w-4 h-4" />
                     </button>
                     {/* Real-time Log Button - Pro Only */}
-                    <button
-                        onClick={isPro ? (isLogging ? handleStopLogging : handleStartLogging) : undefined}
-                        className={clsx(
-                            "p-1 flex items-center gap-1 text-xs rounded",
-                            !isPro ? "text-zinc-600 cursor-not-allowed" :
-                                isLogging ? "text-red-400 bg-red-900/30 animate-pulse" : "hover:text-white"
+                    <div className="relative">
+                        <button
+                            onClick={() => {
+                                if (!isPro) return;
+                                if (isLogging) {
+                                    handleStopLogging();
+                                } else {
+                                    setShowLogOptions(!showLogOptions);
+                                }
+                            }}
+                            className={clsx(
+                                "p-1 flex items-center gap-1 text-xs rounded",
+                                !isPro ? "text-zinc-600 cursor-not-allowed" :
+                                    isLogging ? "text-red-400 bg-red-900/30 animate-pulse" : "hover:text-white"
+                            )}
+                            title={!isPro ? "Real-time Logging (Pro Feature)" : isLogging ? "Stop Logging" : "Start Logging to File"}
+                        >
+                            {!isPro ? <Lock className="w-3 h-3" /> : <FileText className="w-4 h-4" />}
+                            {isLogging && <span className="text-[10px]">LOG</span>}
+                            {!isPro && <span className="text-[10px]">PRO</span>}
+                        </button>
+                        {showLogOptions && !isLogging && isPro && (
+                            <div className="absolute right-0 top-full mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 p-2 w-48">
+                                <div className="text-[10px] text-zinc-400 font-semibold mb-1 uppercase">Log Format</div>
+                                <div className="text-[10px] text-zinc-500 mb-2">Select format. Default = ASCII + HEX combined.</div>
+                                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                                    <input type="checkbox" checked={exportAscii} onChange={e => setExportAscii(e.target.checked)} />
+                                    ASCII only
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                                    <input type="checkbox" checked={exportHex} onChange={e => setExportHex(e.target.checked)} />
+                                    HEX only
+                                </label>
+                                <button
+                                    onClick={handleStartLogging}
+                                    className="w-full mt-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-medium"
+                                >
+                                    Start Logging
+                                </button>
+                            </div>
                         )}
-                        title={!isPro ? "Real-time Logging (Pro Feature)" : isLogging ? "Stop Logging" : "Start Logging to File"}
-                    >
-                        {!isPro ? <Lock className="w-3 h-3" /> : <FileText className="w-4 h-4" />}
-                        {isLogging && <span className="text-[10px]">LOG</span>}
-                        {!isPro && <span className="text-[10px]">PRO</span>}
-                    </button>
-                    <button onClick={handleExport} className="p-1 hover:text-white" title="Download Session">
-                        <Download className="w-4 h-4" />
-                    </button>
+                    </div>
+                    {/* Export Options */}
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowExportOptions(!showExportOptions)}
+                            className={clsx("p-1 hover:text-white", showExportOptions && "text-green-400")}
+                            title="Export Options"
+                        >
+                            <Download className="w-4 h-4" />
+                        </button>
+                        {showExportOptions && (
+                            <div className="absolute right-0 top-full mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 p-2 w-48">
+                                <div className="text-[10px] text-zinc-400 font-semibold mb-1 uppercase">Export Formats</div>
+                                <div className="text-[10px] text-zinc-500 mb-2">Select formats for separate files. None = combined default.</div>
+                                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                                    <input type="checkbox" checked={exportAscii} onChange={e => setExportAscii(e.target.checked)} />
+                                    ASCII
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                                    <input type="checkbox" checked={exportHex} onChange={e => setExportHex(e.target.checked)} />
+                                    HEX
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                                    <input type="checkbox" checked={exportBin} onChange={e => setExportBin(e.target.checked)} />
+                                    BIN
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                                    <input type="checkbox" checked={exportDec} onChange={e => setExportDec(e.target.checked)} />
+                                    DEC
+                                </label>
+                                <button
+                                    onClick={() => { handleExport(); setShowExportOptions(false); }}
+                                    className="w-full mt-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-medium"
+                                >
+                                    Download
+                                </button>
+                            </div>
+                        )}
+                    </div>
                     <button onClick={onClear} className="p-1 hover:text-red-400" title="Clear">
                         <Trash2 className="w-4 h-4" />
                     </button>
