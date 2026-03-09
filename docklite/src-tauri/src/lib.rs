@@ -8,8 +8,15 @@ use project_manager::{load_project, save_project, import_ptp_file, Project, Reac
 use serial_manager::{PortInfo, SerialConfig, SerialManager};
 use tcp_manager::TcpManager;
 use ssh_manager::SshManager; // Added SshManager import
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{Manager, State, AppHandle};
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ActiveReaction {
+    pub trigger_data: Vec<u8>,
+    pub response_data: Vec<u8>,
+}
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -79,7 +86,7 @@ fn set_reactions(
     serial_state: State<'_, Arc<SerialManager>>,
     tcp_state: State<'_, Arc<TcpManager>>,
     ssh_state: State<'_, Arc<SshManager>>,
-    new_reactions: Vec<Reaction>,
+    new_reactions: Vec<ActiveReaction>,
 ) {
     serial_state.set_reactions(new_reactions.clone());
     tcp_state.set_reactions(new_reactions.clone());

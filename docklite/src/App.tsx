@@ -163,10 +163,39 @@ function App() {
 
   // Synchronize Reactions Array to Rust Backend
   useEffect(() => {
-    invoke("set_reactions", { newReactions: project.reactions }).catch(e =>
+    const mappedReactions = project.reactions.filter(r => r.enabled).map(r => {
+      let triggerBytes: number[] = [];
+      if (r.view_mode === "Hex") {
+        triggerBytes = r.trigger_data.split(/\s+/).filter(Boolean).map(s => parseInt(s, 16));
+      } else {
+        for (let i = 0; i < r.trigger_data.length; i++) {
+          triggerBytes.push(r.trigger_data.charCodeAt(i));
+        }
+      }
+
+      let responseBytes: number[] = [];
+      const seq = project.send_sequences.find(s => s.id === r.response_sequence_id);
+      if (seq && seq.data) {
+        if (seq.view_mode === "Hex") {
+          responseBytes = seq.data.split(/\s+/).filter(Boolean).map(s => parseInt(s, 16));
+        } else {
+          for (let i = 0; i < seq.data.length; i++) {
+            responseBytes.push(seq.data.charCodeAt(i));
+          }
+        }
+      }
+
+      // Safeguard against NaN from bad hex typing
+      triggerBytes = triggerBytes.filter(n => !isNaN(n));
+      responseBytes = responseBytes.filter(n => !isNaN(n));
+
+      return { trigger_data: triggerBytes, response_data: responseBytes };
+    });
+
+    invoke("set_reactions", { newReactions: mappedReactions }).catch(e =>
       console.error("Failed to sync reactions to backend:", e)
     );
-  }, [project.reactions]);
+  }, [project.reactions, project.send_sequences]);
 
   useEffect(() => {
     // Listen for incoming data (both Serial and TCP emit this)

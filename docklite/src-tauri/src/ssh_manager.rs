@@ -1,4 +1,4 @@
-use crate::project_manager::{parse_hex_string, Reaction};
+use crate::ActiveReaction;
 use ssh2::Session;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter};
 pub struct SshManager {
     tcp: Arc<Mutex<Option<TcpStream>>>,
     tx: Arc<Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>>,
-    reactions: Arc<Mutex<Vec<Reaction>>>,
+    reactions: Arc<Mutex<Vec<ActiveReaction>>>,
 }
 
 impl SshManager {
@@ -141,42 +141,25 @@ impl SshManager {
                         // Process Auto-Reactions (if any match the trigger)
                         let reactions = reactions_clone.lock().unwrap();
                         for r in reactions.iter() {
-                            if !r.enabled {
-                                continue;
-                            }
-
-                            // Parse trigger
-                            let trigger_bytes = if r.view_mode == "Hex" {
-                                parse_hex_string(&r.trigger_data).unwrap_or_default()
-                            } else {
-                                r.trigger_data.as_bytes().to_vec()
-                            };
-
-                            if !trigger_bytes.is_empty() && rolling_buffer.ends_with(&trigger_bytes)
+                            if !r.trigger_data.is_empty()
+                                && rolling_buffer.ends_with(&r.trigger_data)
                             {
                                 let start_ts = SystemTime::now()
                                     .duration_since(UNIX_EPOCH)
                                     .unwrap()
                                     .as_millis();
 
-                                // Parse response
-                                let response_bytes = if r.view_mode == "Hex" {
-                                    parse_hex_string(&r.response_sequence_id).unwrap_or_default()
-                                } else {
-                                    r.response_sequence_id.as_bytes().to_vec()
-                                };
-
                                 // Emit to UI as TX_AUTO
                                 let _ = app_clone.emit(
                                     "serial-data",
-                                    (response_bytes.clone(), start_ts, "TX_AUTO"),
+                                    (r.response_data.clone(), start_ts, "TX_AUTO"),
                                 );
 
                                 // Send the auto-reply back into the SSH write queue
-                                let _ = tx_clone.send(response_bytes);
+                                let _ = tx_clone.send(r.response_data.clone());
 
                                 // Truncate to prevent immediate re-trigger
-                                let t_len = trigger_bytes.len();
+                                let t_len = r.trigger_data.len();
                                 let b_len = rolling_buffer.len();
                                 if b_len >= t_len {
                                     rolling_buffer.truncate(b_len - t_len);
@@ -241,7 +224,7 @@ impl SshManager {
         }
     }
 
-    pub fn set_reactions(&self, new_reactions: Vec<Reaction>) {
+    pub fn set_reactions(&self, new_reactions: Vec<ActiveReaction>) {
         let mut r_lock = self.reactions.lock().unwrap();
         *r_lock = new_reactions;
     }
