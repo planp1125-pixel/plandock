@@ -164,25 +164,12 @@ function App() {
   // Synchronize Reactions Array to Rust Backend
   useEffect(() => {
     const mappedReactions = project.reactions.filter(r => r.enabled).map(r => {
-      let triggerBytes: number[] = [];
-      if (r.view_mode === "Hex") {
-        triggerBytes = r.trigger_data.split(/\s+/).filter(Boolean).map(s => parseInt(s, 16));
-      } else {
-        for (let i = 0; i < r.trigger_data.length; i++) {
-          triggerBytes.push(r.trigger_data.charCodeAt(i));
-        }
-      }
+      let triggerBytes = parseData(r.trigger_data, r.view_mode as "Ascii" | "Hex");
 
       let responseBytes: number[] = [];
       const seq = project.send_sequences.find(s => s.id === r.response_sequence_id);
       if (seq && seq.data) {
-        if (seq.view_mode === "Hex") {
-          responseBytes = seq.data.split(/\s+/).filter(Boolean).map(s => parseInt(s, 16));
-        } else {
-          for (let i = 0; i < seq.data.length; i++) {
-            responseBytes.push(seq.data.charCodeAt(i));
-          }
-        }
+        responseBytes = parseData(seq.data, seq.view_mode as "Ascii" | "Hex" | "Binary" | "Decimal");
       }
 
       // Safeguard against NaN from bad hex typing
@@ -398,7 +385,7 @@ function App() {
           <img src={logo} alt="Plan Terminal" className="w-7 h-7" />
           <div className="flex items-baseline gap-2">
             <h1 className="text-lg font-bold">Plan Terminal</h1>
-            <span className="text-xs text-muted-foreground font-medium">v0.4.4</span>
+            <span className="text-xs text-muted-foreground font-medium">v0.4.5</span>
           </div>
           {project.name !== "Plan Terminal" && (
             <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">{project.name}</span>

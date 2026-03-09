@@ -350,12 +350,18 @@ impl SerialManager {
                             // Write to log file if logging is active
                             Self::write_log_entry(&log_file_clone, &log_format_clone, &data, "RX");
 
-                            // Still maintain rolling buffer for reactions
+                            // Manage rolling buffer for reactions
                             rolling_buffer.extend_from_slice(&data);
                             if rolling_buffer.len() > 8192 {
                                 let len = rolling_buffer.len();
                                 rolling_buffer.drain(0..len - 8192);
                             }
+
+                            println!(
+                                "[SERIAL RX] Rolling buffer now has {} bytes: {:02X?}",
+                                rolling_buffer.len(),
+                                rolling_buffer
+                            );
 
                             loop {
                                 let mut matched = false;
@@ -367,6 +373,7 @@ impl SerialManager {
                                                 .windows(r.trigger_data.len())
                                                 .position(|w| w == r.trigger_data)
                                             {
+                                                println!("[SERIAL AUTO-REPLY] Match found at pos {} for trigger {:02X?}", pos, r.trigger_data);
                                                 let ts = SystemTime::now()
                                                     .duration_since(UNIX_EPOCH)
                                                     .unwrap()
@@ -377,6 +384,10 @@ impl SerialManager {
                                                     (r.response_data.clone(), ts, "TX_AUTO"),
                                                 );
 
+                                                println!(
+                                                    "[SERIAL AUTO-REPLY] Sending response: {:02X?}",
+                                                    r.response_data
+                                                );
                                                 let mut wp = write_port_clone.lock().unwrap();
                                                 if let Some(port) = wp.as_mut() {
                                                     let _ = port.write_all(&r.response_data);

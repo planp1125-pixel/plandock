@@ -144,6 +144,12 @@ impl TcpManager {
                             rolling_buffer.drain(0..len - 8192);
                         }
 
+                        println!(
+                            "[TCP RX] Rolling buffer now has {} bytes: {:02X?}",
+                            rolling_buffer.len(),
+                            rolling_buffer
+                        );
+
                         // Process Auto-Reactions (if any match the trigger)
                         loop {
                             let mut matched = false;
@@ -155,6 +161,7 @@ impl TcpManager {
                                             .windows(r.trigger_data.len())
                                             .position(|w| w == r.trigger_data)
                                         {
+                                            println!("[TCP AUTO-REPLY] Match found at pos {} for trigger {:02X?}", pos, r.trigger_data);
                                             let start_ts = SystemTime::now()
                                                 .duration_since(UNIX_EPOCH)
                                                 .unwrap()
@@ -167,6 +174,10 @@ impl TcpManager {
                                             );
 
                                             // Send the auto-reply over the TCP socket blocking
+                                            println!(
+                                                "[TCP AUTO-REPLY] Sending response: {:02X?}",
+                                                r.response_data
+                                            );
                                             if let Some(mut w_stream) = write_stream.as_ref() {
                                                 let _ = w_stream.write_all(&r.response_data);
                                                 let _ = w_stream.flush();

@@ -88,6 +88,11 @@ fn set_reactions(
     ssh_state: State<'_, Arc<SshManager>>,
     new_reactions: Vec<ActiveReaction>,
 ) {
+    println!("[BACKEND] Syncing {} active reactions from frontend...", new_reactions.len());
+    for (i, r) in new_reactions.iter().enumerate() {
+        println!("  Reaction {}: Trigger: {:02X?}, Response: {:02X?}", i, r.trigger_data, r.response_data);
+    }
+
     serial_state.set_reactions(new_reactions.clone());
     tcp_state.set_reactions(new_reactions.clone());
     ssh_state.set_reactions(new_reactions);
