@@ -357,44 +357,49 @@ impl SerialManager {
                                 rolling_buffer.drain(0..len - 8192);
                             }
 
-                            let reactions = reactions_clone.lock().unwrap();
-                            for r in reactions.iter() {
-                                if !r.trigger_data.is_empty()
-                                    && rolling_buffer.ends_with(&r.trigger_data)
+                            loop {
+                                let mut matched = false;
                                 {
-                                    // Capture timestamp BEFORE write (when reaction is triggered)
-                                    let ts = SystemTime::now()
-                                        .duration_since(UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_millis();
+                                    let reactions = reactions_clone.lock().unwrap();
+                                    for r in reactions.iter() {
+                                        if !r.trigger_data.is_empty() {
+                                            if let Some(pos) = rolling_buffer
+                                                .windows(r.trigger_data.len())
+                                                .position(|w| w == r.trigger_data)
+                                            {
+                                                let ts = SystemTime::now()
+                                                    .duration_since(UNIX_EPOCH)
+                                                    .unwrap()
+                                                    .as_millis();
 
-                                    // Emit event immediately (before wire transmission)
-                                    let _ = app.emit(
-                                        "serial-data",
-                                        (r.response_data.clone(), ts, "TX_AUTO"),
-                                    );
+                                                let _ = app.emit(
+                                                    "serial-data",
+                                                    (r.response_data.clone(), ts, "TX_AUTO"),
+                                                );
 
-                                    // Clear matched portion to prevent re-triggering
-                                    let trigger_len = r.trigger_data.len();
-                                    let buf_len = rolling_buffer.len();
-                                    if buf_len >= trigger_len {
-                                        rolling_buffer.truncate(buf_len - trigger_len);
+                                                let mut wp = write_port_clone.lock().unwrap();
+                                                if let Some(port) = wp.as_mut() {
+                                                    let _ = port.write_all(&r.response_data);
+                                                    let _ = port.flush();
+                                                }
+
+                                                Self::write_log_entry(
+                                                    &log_file_clone,
+                                                    &log_format_clone,
+                                                    &r.response_data,
+                                                    "TX_AUTO",
+                                                );
+
+                                                let match_end = pos + r.trigger_data.len();
+                                                rolling_buffer.drain(0..match_end);
+                                                matched = true;
+                                                break;
+                                            }
+                                        }
                                     }
-
-                                    // Now do the actual write (blocking, but event already emitted)
-                                    let mut wp = write_port_clone.lock().unwrap();
-                                    if let Some(port) = wp.as_mut() {
-                                        let _ = port.write_all(&r.response_data);
-                                        let _ = port.flush();
-                                    }
-
-                                    // Log TX_AUTO to file
-                                    Self::write_log_entry(
-                                        &log_file_clone,
-                                        &log_format_clone,
-                                        &r.response_data,
-                                        "TX_AUTO",
-                                    );
+                                }
+                                if !matched {
+                                    break;
                                 }
                             }
                         }

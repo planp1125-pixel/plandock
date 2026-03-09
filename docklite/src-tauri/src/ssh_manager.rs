@@ -139,31 +139,41 @@ impl SshManager {
                         }
 
                         // Process Auto-Reactions (if any match the trigger)
-                        let reactions = reactions_clone.lock().unwrap();
-                        for r in reactions.iter() {
-                            if !r.trigger_data.is_empty()
-                                && rolling_buffer.ends_with(&r.trigger_data)
+                        loop {
+                            let mut matched = false;
                             {
-                                let start_ts = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap()
-                                    .as_millis();
+                                let reactions = reactions_clone.lock().unwrap();
+                                for r in reactions.iter() {
+                                    if !r.trigger_data.is_empty() {
+                                        if let Some(pos) = rolling_buffer
+                                            .windows(r.trigger_data.len())
+                                            .position(|w| w == r.trigger_data)
+                                        {
+                                            let start_ts = SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .unwrap()
+                                                .as_millis();
 
-                                // Emit to UI as TX_AUTO
-                                let _ = app_clone.emit(
-                                    "serial-data",
-                                    (r.response_data.clone(), start_ts, "TX_AUTO"),
-                                );
+                                            // Emit to UI as TX_AUTO
+                                            let _ = app_clone.emit(
+                                                "serial-data",
+                                                (r.response_data.clone(), start_ts, "TX_AUTO"),
+                                            );
 
-                                // Send the auto-reply back into the SSH write queue
-                                let _ = tx_clone.send(r.response_data.clone());
+                                            // Send the auto-reply back into the SSH write queue
+                                            let _ = tx_clone.send(r.response_data.clone());
 
-                                // Truncate to prevent immediate re-trigger
-                                let t_len = r.trigger_data.len();
-                                let b_len = rolling_buffer.len();
-                                if b_len >= t_len {
-                                    rolling_buffer.truncate(b_len - t_len);
+                                            // Truncate the buffer segment up to the reaction match
+                                            let match_end = pos + r.trigger_data.len();
+                                            rolling_buffer.drain(0..match_end);
+                                            matched = true;
+                                            break; // restart loop so changes map safely
+                                        }
+                                    }
                                 }
+                            }
+                            if !matched {
+                                break;
                             }
                         }
                     }
