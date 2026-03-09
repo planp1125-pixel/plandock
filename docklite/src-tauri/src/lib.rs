@@ -4,8 +4,8 @@ mod tcp_manager;
 mod serial_manager;
 mod ssh_manager; // Added ssh_manager module
 use license::{LicenseManager, LicenseStatus};
-use project_manager::{load_project, save_project, import_ptp_file, Project};
-use serial_manager::{PortInfo, Reaction, SerialConfig, SerialManager};
+use project_manager::{load_project, save_project, import_ptp_file, Project, Reaction};
+use serial_manager::{PortInfo, SerialConfig, SerialManager};
 use tcp_manager::TcpManager;
 use ssh_manager::SshManager; // Added SshManager import
 use std::sync::Arc;
@@ -75,8 +75,15 @@ fn import_docklight_file(path: String) -> Result<Project, String> {
 }
 
 #[tauri::command]
-fn set_reactions(state: State<'_, Arc<SerialManager>>, new_reactions: Vec<Reaction>) {
-    state.set_reactions(new_reactions);
+fn set_reactions(
+    serial_state: State<'_, Arc<SerialManager>>,
+    tcp_state: State<'_, Arc<TcpManager>>,
+    ssh_state: State<'_, Arc<SshManager>>,
+    new_reactions: Vec<Reaction>,
+) {
+    serial_state.set_reactions(new_reactions.clone());
+    tcp_state.set_reactions(new_reactions.clone());
+    ssh_state.set_reactions(new_reactions);
 }
 
 #[tauri::command]

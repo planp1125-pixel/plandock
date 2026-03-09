@@ -161,6 +161,13 @@ function App() {
     }
   }, [project]);
 
+  // Synchronize Reactions Array to Rust Backend
+  useEffect(() => {
+    invoke("set_reactions", { newReactions: project.reactions }).catch(e =>
+      console.error("Failed to sync reactions to backend:", e)
+    );
+  }, [project.reactions]);
+
   useEffect(() => {
     // Listen for incoming data (both Serial and TCP emit this)
     const unlistenData = listen<any>('serial-data', (event) => {

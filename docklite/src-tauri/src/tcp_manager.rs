@@ -1,3 +1,4 @@
+use crate::project_manager::{parse_hex_string, Reaction};
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Read, Write};
 use std::net::TcpStream;
@@ -10,6 +11,7 @@ pub struct TcpManager {
     stream: Arc<Mutex<Option<TcpStream>>>,
     is_reading: Arc<Mutex<bool>>,
     log_file: Arc<Mutex<Option<BufWriter<File>>>>,
+    reactions: Arc<Mutex<Vec<Reaction>>>,
 }
 
 impl TcpManager {
@@ -18,6 +20,7 @@ impl TcpManager {
             stream: Arc::new(Mutex::new(None)),
             is_reading: Arc::new(Mutex::new(false)),
             log_file: Arc::new(Mutex::new(None)),
+            reactions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -56,6 +59,11 @@ impl TcpManager {
         Ok(())
     }
 
+    pub fn set_reactions(&self, new_reactions: Vec<Reaction>) {
+        let mut r_lock = self.reactions.lock().unwrap();
+        *r_lock = new_reactions;
+    }
+
     pub fn disconnect(&self) {
         {
             let mut r = self.is_reading.lock().unwrap();
@@ -92,6 +100,8 @@ impl TcpManager {
 
     fn start_reader(&self, app: AppHandle, mut read_stream: TcpStream) {
         let is_reading = self.is_reading.clone();
+        let reactions_clone = self.reactions.clone();
+        let write_stream = read_stream.try_clone().ok();
 
         {
             let mut r = is_reading.lock().unwrap();
@@ -103,6 +113,7 @@ impl TcpManager {
 
         thread::spawn(move || {
             let mut buf = vec![0u8; 4096];
+            let mut rolling_buffer: Vec<u8> = Vec::new();
 
             loop {
                 if !*is_reading.lock().unwrap() {
@@ -125,6 +136,62 @@ impl TcpManager {
 
                         // Emit to frontend (same event format as serial)
                         let _ = app.emit("serial-data", (data.clone(), ts, "RX"));
+
+                        // Manage rolling buffer for reactions
+                        rolling_buffer.extend_from_slice(&data);
+                        if rolling_buffer.len() > 8192 {
+                            let len = rolling_buffer.len();
+                            rolling_buffer.drain(0..len - 8192);
+                        }
+
+                        // Process Auto-Reactions (if any match the trigger)
+                        let reactions = reactions_clone.lock().unwrap();
+                        for r in reactions.iter() {
+                            if !r.enabled {
+                                continue;
+                            }
+
+                            // Parse trigger
+                            let trigger_bytes = if r.view_mode == "Hex" {
+                                parse_hex_string(&r.trigger_data).unwrap_or_default()
+                            } else {
+                                r.trigger_data.as_bytes().to_vec()
+                            };
+
+                            if !trigger_bytes.is_empty() && rolling_buffer.ends_with(&trigger_bytes)
+                            {
+                                let start_ts = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis();
+
+                                // Parse response
+                                let response_bytes = if r.view_mode == "Hex" {
+                                    parse_hex_string(&r.response_sequence_id).unwrap_or_default()
+                                } else {
+                                    r.response_sequence_id.as_bytes().to_vec()
+                                };
+
+                                // Emit to UI as TX_AUTO
+                                let _ = app.emit(
+                                    "serial-data",
+                                    (response_bytes.clone(), start_ts, "TX_AUTO"),
+                                );
+
+                                // Send the auto-reply over the TCP socket blocking
+                                if let Some(mut w_stream) = write_stream.as_ref() {
+                                    let _ = w_stream.write_all(&response_bytes);
+                                    let _ = w_stream.flush();
+                                }
+
+                                // Truncate to prevent immediate re-trigger
+                                let t_len = trigger_bytes.len();
+                                let b_len = rolling_buffer.len();
+                                if b_len >= t_len {
+                                    rolling_buffer.truncate(b_len - t_len);
+                                }
+                            }
+                        }
                     }
                     Err(ref e)
                         if e.kind() == std::io::ErrorKind::TimedOut

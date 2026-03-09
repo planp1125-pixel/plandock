@@ -1,3 +1,4 @@
+use crate::project_manager::{parse_hex_string, Reaction};
 use ssh2::Session;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -9,6 +10,7 @@ use tauri::{AppHandle, Emitter};
 pub struct SshManager {
     tcp: Arc<Mutex<Option<TcpStream>>>,
     tx: Arc<Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>>,
+    reactions: Arc<Mutex<Vec<Reaction>>>,
 }
 
 impl SshManager {
@@ -16,6 +18,7 @@ impl SshManager {
         Self {
             tcp: Arc::new(Mutex::new(None)),
             tx: Arc::new(Mutex::new(None)),
+            reactions: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -50,12 +53,14 @@ impl SshManager {
 
         {
             let mut self_tx = self.tx.lock().unwrap();
-            *self_tx = Some(tx);
+            *self_tx = Some(tx.clone());
         }
 
         let user = user.to_string();
         let pass = pass.to_string();
         let app_clone = app.clone();
+        let reactions_clone = self.reactions.clone();
+        let tx_clone = tx.clone(); // so we can send auto-replies back through our own tx loop
 
         thread::spawn(move || {
             let mut sess = match Session::new() {
@@ -104,6 +109,7 @@ impl SshManager {
             sess.set_blocking(false);
 
             let mut buf = vec![0u8; 4096];
+            let mut rolling_buffer: Vec<u8> = Vec::new();
             let mut active = true;
 
             eprintln!("[SSH] Background thread active and connected");
@@ -123,7 +129,60 @@ impl SshManager {
                             .unwrap()
                             .as_millis();
                         // Emit to frontend
-                        let _ = app_clone.emit("serial-data", (data, ts, "RX"));
+                        let _ = app_clone.emit("serial-data", (data.clone(), ts, "RX"));
+
+                        // Manage rolling buffer for reactions
+                        rolling_buffer.extend_from_slice(&data);
+                        if rolling_buffer.len() > 8192 {
+                            let len = rolling_buffer.len();
+                            rolling_buffer.drain(0..len - 8192);
+                        }
+
+                        // Process Auto-Reactions (if any match the trigger)
+                        let reactions = reactions_clone.lock().unwrap();
+                        for r in reactions.iter() {
+                            if !r.enabled {
+                                continue;
+                            }
+
+                            // Parse trigger
+                            let trigger_bytes = if r.view_mode == "Hex" {
+                                parse_hex_string(&r.trigger_data).unwrap_or_default()
+                            } else {
+                                r.trigger_data.as_bytes().to_vec()
+                            };
+
+                            if !trigger_bytes.is_empty() && rolling_buffer.ends_with(&trigger_bytes)
+                            {
+                                let start_ts = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis();
+
+                                // Parse response
+                                let response_bytes = if r.view_mode == "Hex" {
+                                    parse_hex_string(&r.response_sequence_id).unwrap_or_default()
+                                } else {
+                                    r.response_sequence_id.as_bytes().to_vec()
+                                };
+
+                                // Emit to UI as TX_AUTO
+                                let _ = app_clone.emit(
+                                    "serial-data",
+                                    (response_bytes.clone(), start_ts, "TX_AUTO"),
+                                );
+
+                                // Send the auto-reply back into the SSH write queue
+                                let _ = tx_clone.send(response_bytes);
+
+                                // Truncate to prevent immediate re-trigger
+                                let t_len = trigger_bytes.len();
+                                let b_len = rolling_buffer.len();
+                                if b_len >= t_len {
+                                    rolling_buffer.truncate(b_len - t_len);
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         // WouldBlock is expected in non-blocking mode
@@ -180,6 +239,11 @@ impl SshManager {
         } else {
             Err("SSH connection not active or sender not initialized".to_string())
         }
+    }
+
+    pub fn set_reactions(&self, new_reactions: Vec<Reaction>) {
+        let mut r_lock = self.reactions.lock().unwrap();
+        *r_lock = new_reactions;
     }
 
     pub fn disconnect(&self) {

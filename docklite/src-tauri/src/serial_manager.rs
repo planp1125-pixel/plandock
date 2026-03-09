@@ -20,11 +20,7 @@ pub struct PortInfo {
     info: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Reaction {
-    pub trigger_data: Vec<u8>,
-    pub response_data: Vec<u8>,
-}
+use crate::project_manager::{parse_hex_string, Reaction};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SerialConfig {
@@ -363,8 +359,19 @@ impl SerialManager {
 
                             let reactions = reactions_clone.lock().unwrap();
                             for r in reactions.iter() {
-                                if !r.trigger_data.is_empty()
-                                    && rolling_buffer.ends_with(&r.trigger_data)
+                                if !r.enabled {
+                                    continue;
+                                }
+
+                                // Parse trigger
+                                let trigger_bytes = if r.view_mode == "Hex" {
+                                    parse_hex_string(&r.trigger_data).unwrap_or_default()
+                                } else {
+                                    r.trigger_data.as_bytes().to_vec()
+                                };
+
+                                if !trigger_bytes.is_empty()
+                                    && rolling_buffer.ends_with(&trigger_bytes)
                                 {
                                     // Capture timestamp BEFORE write (when reaction is triggered)
                                     let ts = SystemTime::now()
@@ -372,14 +379,22 @@ impl SerialManager {
                                         .unwrap()
                                         .as_millis();
 
+                                    // Parse response
+                                    let response_bytes = if r.view_mode == "Hex" {
+                                        parse_hex_string(&r.response_sequence_id)
+                                            .unwrap_or_default()
+                                    } else {
+                                        r.response_sequence_id.as_bytes().to_vec()
+                                    };
+
                                     // Emit event immediately (before wire transmission)
                                     let _ = app.emit(
                                         "serial-data",
-                                        (r.response_data.clone(), ts, "TX_AUTO"),
+                                        (response_bytes.clone(), ts, "TX_AUTO"),
                                     );
 
                                     // Clear matched portion to prevent re-triggering
-                                    let trigger_len = r.trigger_data.len();
+                                    let trigger_len = trigger_bytes.len();
                                     let buf_len = rolling_buffer.len();
                                     if buf_len >= trigger_len {
                                         rolling_buffer.truncate(buf_len - trigger_len);
@@ -388,7 +403,7 @@ impl SerialManager {
                                     // Now do the actual write (blocking, but event already emitted)
                                     let mut wp = write_port_clone.lock().unwrap();
                                     if let Some(port) = wp.as_mut() {
-                                        let _ = port.write_all(&r.response_data);
+                                        let _ = port.write_all(&response_bytes);
                                         let _ = port.flush();
                                     }
 
@@ -396,7 +411,7 @@ impl SerialManager {
                                     Self::write_log_entry(
                                         &log_file_clone,
                                         &log_format_clone,
-                                        &r.response_data,
+                                        &response_bytes,
                                         "TX_AUTO",
                                     );
                                 }
