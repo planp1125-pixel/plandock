@@ -45,6 +45,8 @@ pub struct SshConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
+    pub auth_mode: Option<String>,
+    pub auth_secret: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -52,6 +54,8 @@ pub struct Project {
     pub name: String,
     pub send_sequences: Vec<Sequence>,
     pub reactions: Vec<Reaction>,
+    pub file_path: Option<String>,
+    pub connection_type: Option<String>,
     pub serial_config: Option<SerialConfig>,
     pub tcp_config: Option<TcpConfig>,
     pub ssh_config: Option<SshConfig>,
@@ -64,6 +68,8 @@ impl Project {
             name: "Plan Terminal".to_string(),
             send_sequences: vec![],
             reactions: vec![],
+            file_path: None,
+            connection_type: None,
             serial_config: None,
             tcp_config: None,
             ssh_config: None,
@@ -126,6 +132,7 @@ pub fn load_project(path: &str) -> Result<Project, String> {
         }
     }
 
+    project.file_path = Some(path.to_string());
     Ok(project)
 }
 
@@ -479,6 +486,8 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
         name: project_name,
         send_sequences: sequences,
         reactions,
+        file_path: Some(path.to_string()),
+        connection_type: None,
         serial_config,
         tcp_config: None,
         ssh_config: None,

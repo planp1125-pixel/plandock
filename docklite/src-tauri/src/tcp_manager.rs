@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
 pub struct TcpManager {
-    stream: Arc<Mutex<Option<TcpStream>>>,
+    stream: Arc<Mutex<Option<Arc<TcpStream>>>>,
     is_reading: Arc<Mutex<bool>>,
     log_file: Arc<Mutex<Option<BufWriter<File>>>>,
     reactions: Arc<Mutex<Vec<ActiveReaction>>>,
@@ -39,21 +39,28 @@ impl TcpManager {
         )
         .map_err(|e| format!("Connection failed: {}", e))?;
 
-        // Set non-blocking read timeout
+        // Socket natively blocks forever on read until data arrives or shutdown() is called
+
+        // Ensure writes have a finite timeout to expose kernel drops
         stream
-            .set_read_timeout(Some(Duration::from_millis(1)))
+            .set_write_timeout(Some(Duration::from_secs(2)))
             .map_err(|e| e.to_string())?;
 
-        // Clone for the write side
-        let write_stream = stream.try_clone().map_err(|e| e.to_string())?;
+        // Ensure socket blocks on write buffer flushes
+        stream.set_nonblocking(false).map_err(|e| e.to_string())?;
+
+        // Disable Nagle's algorithm to force instantaneous transmission of small auto-replies
+        stream.set_nodelay(true).map_err(|e| e.to_string())?;
+
+        let shared_stream = Arc::new(stream);
 
         {
             let mut s = self.stream.lock().unwrap();
-            *s = Some(write_stream);
+            *s = Some(shared_stream.clone());
         }
 
         // Start reader thread
-        self.start_reader(app, stream);
+        self.start_reader(app, shared_stream);
 
         eprintln!("[TCP] Connected to {}", addr);
         Ok(())
@@ -73,8 +80,9 @@ impl TcpManager {
         thread::sleep(Duration::from_millis(50));
         {
             let mut s = self.stream.lock().unwrap();
-            if let Some(ref stream) = *s {
-                let _ = stream.shutdown(std::net::Shutdown::Both);
+            if let Some(stream_arc) = s.as_ref() {
+                let s_ref = stream_arc.as_ref();
+                let _ = s_ref.shutdown(std::net::Shutdown::Both);
             }
             *s = None;
         }
@@ -86,22 +94,37 @@ impl TcpManager {
     }
 
     pub fn write_data(&self, data: Vec<u8>) -> Result<(), String> {
-        let mut s = self.stream.lock().unwrap();
-        if let Some(ref mut stream) = *s {
-            stream
-                .write_all(&data)
-                .map_err(|e| format!("TCP write failed: {}", e))?;
-            stream.flush().map_err(|e| e.to_string())?;
-            Ok(())
+        println!(
+            "[TCP MANUAL TX] Attempting to send {} bytes: {:02X?}",
+            data.len(),
+            data
+        );
+        let s = self.stream.lock().unwrap();
+        if let Some(stream_arc) = s.as_ref() {
+            let mut s_ref = &**stream_arc;
+            match s_ref.write_all(&data) {
+                Ok(_) => {
+                    println!("[TCP MANUAL TX] Successfully wrote to socket");
+                    if let Err(e) = s_ref.flush() {
+                        eprintln!("[TCP MANUAL TX] Flush error: {}", e);
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("[TCP MANUAL TX] Socket write error: {}", e);
+                    Err(format!("TCP write failed: {}", e))
+                }
+            }
         } else {
+            eprintln!("[TCP MANUAL TX] Not connected!");
             Err("Not connected".to_string())
         }
     }
 
-    fn start_reader(&self, app: AppHandle, mut read_stream: TcpStream) {
+    fn start_reader(&self, app: AppHandle, read_stream: Arc<TcpStream>) {
         let is_reading = self.is_reading.clone();
         let reactions_clone = self.reactions.clone();
-        let write_stream = read_stream.try_clone().ok();
+        let stream_clone = self.stream.clone();
 
         {
             let mut r = is_reading.lock().unwrap();
@@ -120,7 +143,8 @@ impl TcpManager {
                     break;
                 }
 
-                match read_stream.read(&mut buf) {
+                let mut rs_ref = read_stream.as_ref();
+                match rs_ref.read(&mut buf) {
                     Ok(0) => {
                         // Connection closed by remote
                         eprintln!("[TCP] Connection closed by remote");
@@ -178,9 +202,27 @@ impl TcpManager {
                                                 "[TCP AUTO-REPLY] Sending response: {:02X?}",
                                                 r.response_data
                                             );
-                                            if let Some(mut w_stream) = write_stream.as_ref() {
-                                                let _ = w_stream.write_all(&r.response_data);
-                                                let _ = w_stream.flush();
+                                            if let Some(w_stream_arc) =
+                                                stream_clone.lock().unwrap().as_ref()
+                                            {
+                                                let mut w_stream = &**w_stream_arc;
+                                                match w_stream.write_all(&r.response_data) {
+                                                    Ok(_) => {
+                                                        println!("[TCP AUTO-REPLY] Successfully wrote to socket");
+                                                        if let Err(e) = w_stream.flush() {
+                                                            eprintln!(
+                                                                "[TCP AUTO-REPLY] Flush error: {}",
+                                                                e
+                                                            );
+                                                        }
+                                                    }
+                                                    Err(e) => eprintln!(
+                                                        "[TCP AUTO-REPLY] Socket write error: {}",
+                                                        e
+                                                    ),
+                                                }
+                                            } else {
+                                                eprintln!("[TCP AUTO-REPLY] Failed to acquire writable stream lock!");
                                             }
 
                                             // Truncate the buffer segment up to the reaction match
@@ -196,13 +238,6 @@ impl TcpManager {
                                 break;
                             }
                         }
-                    }
-                    Err(ref e)
-                        if e.kind() == std::io::ErrorKind::TimedOut
-                            || e.kind() == std::io::ErrorKind::WouldBlock =>
-                    {
-                        // No data available, sleep briefly
-                        thread::sleep(Duration::from_millis(1));
                     }
                     Err(e) => {
                         eprintln!("[TCP] Read error: {}", e);

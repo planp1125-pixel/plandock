@@ -161,7 +161,28 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
         }
     };
 
+    const [saveToast, setSaveToast] = useState<string | null>(null);
+
     const handleSave = async () => {
+        try {
+            if (project.file_path) {
+                // If we already have a file path, just save directly without prompting
+                await invoke("save_project_file", { path: project.file_path, project });
+
+                // Show a quick, non-intrusive toast notification
+                setSaveToast("Saved!");
+                setTimeout(() => setSaveToast(null), 2000);
+            } else {
+                // Otherwise fall back to Save As
+                await handleSaveAs();
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Error saving: " + e);
+        }
+    };
+
+    const handleSaveAs = async () => {
         try {
             const path = await save({
                 filters: [{ name: 'Plan Terminal Project', extensions: ['plant', 'json'] }]
@@ -173,7 +194,9 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                 finalPath += '.plant';
             }
 
-            await invoke("save_project_file", { path: finalPath, project });
+            const updatedProject = { ...project, file_path: finalPath };
+            await invoke("save_project_file", { path: finalPath, project: updatedProject });
+            onUpdate(updatedProject); // Update local state with the new file_path
             alert("Project saved successfully to " + finalPath);
         } catch (e) {
             console.error(e);
@@ -349,7 +372,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                 </DndContext>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex gap-2 relative">
                 <button
                     className="flex-1 flex items-center justify-center gap-2 py-2 bg-secondary hover:bg-secondary/80 rounded font-medium text-sm"
                     onClick={handleLoad}
@@ -360,10 +383,26 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                 <button
                     className="flex-1 flex items-center justify-center gap-2 py-2 bg-secondary hover:bg-secondary/80 rounded font-medium text-sm"
                     onClick={handleSave}
-                    title="Save Project"
+                    title={project.file_path ? "Quick Save" : "Save Project"}
                 >
                     <Save className="w-4 h-4" /> Save
                 </button>
+                {project.file_path && (
+                    <button
+                        className="flex-1 flex items-center justify-center gap-2 py-2 bg-secondary hover:bg-secondary/80 rounded font-medium text-sm border border-secondary"
+                        onClick={handleSaveAs}
+                        title="Save Project As..."
+                    >
+                        Save As
+                    </button>
+                )}
+
+                {/* Toast Notification */}
+                {saveToast && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1 bg-green-600 text-white text-xs rounded shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200 pointer-events-none whitespace-nowrap z-50">
+                        {saveToast}
+                    </div>
+                )}
             </div>
         </div >
     );

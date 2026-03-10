@@ -28,7 +28,8 @@ impl SshManager {
         host: &str,
         port: u16,
         user: &str,
-        pass: &str,
+        auth_mode: &str,
+        auth_secret: &str,
     ) -> Result<(), String> {
         self.disconnect(); // Ensure clean slate
 
@@ -41,7 +42,7 @@ impl SshManager {
                 .map_err(|e| format!("Invalid address: {}", e))?,
             Duration::from_secs(5),
         )
-        .map_err(|e| format!("TCP Connection failed: {}", e))?;
+        .map_err(|e| format!("SSH Connection failed: {}", e))?;
 
         let tcp_clone = tcp.try_clone().map_err(|e| e.to_string())?;
         {
@@ -57,7 +58,8 @@ impl SshManager {
         }
 
         let user = user.to_string();
-        let pass = pass.to_string();
+        let auth_mode = auth_mode.to_string();
+        let auth_secret = auth_secret.to_string();
         let app_clone = app.clone();
         let reactions_clone = self.reactions.clone();
         let tx_clone = tx.clone(); // so we can send auto-replies back through our own tx loop
@@ -80,7 +82,14 @@ impl SshManager {
                 return;
             }
 
-            if let Err(e) = sess.userauth_password(&user, &pass) {
+            // Perform Authentication based on mode
+            let auth_result = if auth_mode == "private_key" {
+                sess.userauth_pubkey_file(&user, None, std::path::Path::new(&auth_secret), None)
+            } else {
+                sess.userauth_password(&user, &auth_secret)
+            };
+
+            if let Err(e) = auth_result {
                 eprintln!("[SSH] Auth failed: {}", e);
                 let _ = app_clone.emit("ssh-disconnected", ());
                 return;

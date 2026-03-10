@@ -196,15 +196,17 @@ async fn connect_ssh(
     host: String,
     port: u16,
     user: String,
-    pass: String,
+    auth_mode: String,
+    auth_secret: String,
 ) -> Result<(), String> {
     let host = host.clone();
     let user = user.clone();
-    let pass = pass.clone();
+    let auth_mode = auth_mode.clone();
+    let auth_secret = auth_secret.clone();
     let manager = ssh_manager.inner().clone();
     
     tauri::async_runtime::spawn_blocking(move || {
-        manager.connect(app, &host, port, &user, &pass)
+        manager.connect(app, &host, port, &user, &auth_mode, &auth_secret)
     }).await.map_err(|e| e.to_string())?
 }
 

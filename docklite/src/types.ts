@@ -39,13 +39,17 @@ export interface TcpConfig {
 export interface SshConfig {
     host: string;
     port: number;
-    username: string; // Password excluded intentionally
+    username: string; // Password excluded intentionally from raw UI unless private key path
+    auth_mode?: string; // "password" | "private_key"
+    auth_secret?: string; // e.g. path to private key
 }
 
 export interface Project {
     name: string;
     send_sequences: Sequence[];
     reactions: Reaction[];
+    file_path?: string;
+    connection_type?: 'Serial' | 'TCP' | 'SSH';
     serial_config?: SerialConfig;
     tcp_config?: TcpConfig;
     ssh_config?: SshConfig;

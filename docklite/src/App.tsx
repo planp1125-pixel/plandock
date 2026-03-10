@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { Terminal, LogEntry } from "./components/Terminal";
 import { SequenceEditor } from "./components/SequenceEditor";
@@ -141,19 +142,26 @@ function App() {
   const [sshHost, setSshHost] = useState('192.168.1.100');
   const [sshPort, setSshPort] = useState(22);
   const [sshUsername, setSshUsername] = useState('pi');
-  const [sshPassword, setSshPassword] = useState('');
+  const [sshAuthMode, setSshAuthMode] = useState<'password' | 'private_key'>('password');
+  const [sshAuthSecret, setSshAuthSecret] = useState('');
 
   // Update connection fields when project loads (e.g. from .plant files)
   useEffect(() => {
-    if (project.serial_config) {
+    if (project.connection_type) {
+      setConnectionType(project.connection_type);
+    } else if (project.serial_config) {
       setConnectionType('Serial');
-      // Serial is handled by separate logic or is already mostly in place...
     } else if (project.tcp_config) {
       setConnectionType('TCP');
-      setTcpHost(project.tcp_config.host);
-      setTcpPort(project.tcp_config.port);
     } else if (project.ssh_config) {
       setConnectionType('SSH');
+    }
+
+    if (project.tcp_config) {
+      setTcpHost(project.tcp_config.host);
+      setTcpPort(project.tcp_config.port);
+    }
+    if (project.ssh_config) {
       setSshHost(project.ssh_config.host);
       setSshPort(project.ssh_config.port);
       setSshUsername(project.ssh_config.username);
@@ -346,7 +354,8 @@ function App() {
           host: sshHost,
           port: sshPort,
           user: sshUsername,
-          pass: sshPassword
+          auth_mode: sshAuthMode,
+          auth_secret: sshAuthSecret
         });
       }
       setConnected(true);
@@ -385,7 +394,7 @@ function App() {
           <img src={logo} alt="Plan Terminal" className="w-7 h-7" />
           <div className="flex items-baseline gap-2">
             <h1 className="text-lg font-bold">Plan Terminal</h1>
-            <span className="text-xs text-muted-foreground font-medium">v0.4.5</span>
+            <span className="text-xs text-muted-foreground font-medium">v0.4.6</span>
           </div>
           {project.name !== "Plan Terminal" && (
             <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">{project.name}</span>
@@ -685,21 +694,69 @@ function App() {
                 onChange={(e) => setSshPort(Number(e.target.value))}
                 disabled={connected}
               />
-              <span className="text-zinc-500 font-bold"></span>
-              <input
-                type="password"
-                className="w-28 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
+              <span className="text-zinc-500 font-bold ml-1">Auth:</span>
+              <select
+                className="w-24 rounded px-1 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
                 style={{
                   backgroundColor: 'hsl(var(--background))',
                   borderColor: 'hsl(var(--border))',
                   color: 'hsl(var(--foreground))',
                 }}
-                placeholder="Password"
-                title="SSH Password (not saved to .plant)"
-                value={sshPassword}
-                onChange={(e) => setSshPassword(e.target.value)}
+                value={sshAuthMode}
+                onChange={(e) => setSshAuthMode(e.target.value as 'password' | 'private_key')}
                 disabled={connected}
-              />
+              >
+                <option value="password">Password</option>
+                <option value="private_key">Key File</option>
+              </select>
+
+              {sshAuthMode === 'password' ? (
+                <input
+                  type="password"
+                  className="w-28 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
+                  style={{
+                    backgroundColor: 'hsl(var(--background))',
+                    borderColor: 'hsl(var(--border))',
+                    color: 'hsl(var(--foreground))',
+                  }}
+                  placeholder="Password"
+                  title="SSH Password (not saved to .plant)"
+                  value={sshAuthSecret}
+                  onChange={(e) => setSshAuthSecret(e.target.value)}
+                  disabled={connected}
+                />
+              ) : (
+                <div className="flex gap-1 items-center">
+                  <input
+                    type="text"
+                    className="w-32 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
+                    style={{
+                      backgroundColor: 'hsl(var(--background))',
+                      borderColor: 'hsl(var(--border))',
+                      color: 'hsl(var(--foreground))',
+                    }}
+                    placeholder="Path to private key"
+                    title="Private Key File Path (saved to .plant)"
+                    value={sshAuthSecret}
+                    onChange={(e) => setSshAuthSecret(e.target.value)}
+                    disabled={connected}
+                  />
+                  <button
+                    className="px-2 py-1 bg-secondary hover:bg-secondary/80 rounded text-xs"
+                    onClick={async () => {
+                      const selected = await open({
+                        multiple: false
+                      });
+                      if (selected && typeof selected === 'string') {
+                        setSshAuthSecret(selected);
+                      }
+                    }}
+                    disabled={connected}
+                  >
+                    Browse
+                  </button>
+                </div>
+              )}
             </>
           )}
 
@@ -734,10 +791,33 @@ function App() {
             <ProjectSidebar
               project={{
                 ...project,
-                tcp_config: connectionType === 'TCP' ? { host: tcpHost, port: tcpPort } : undefined,
-                ssh_config: connectionType === 'SSH' ? { host: sshHost, port: sshPort, username: sshUsername } : undefined,
+                connection_type: connectionType,
+                serial_config: { port_name: selectedPort, baud_rate: baudRate, data_bits: dataBits, flow_control: flowControl, parity: parity, stop_bits: stopBits },
+                tcp_config: { host: tcpHost, port: tcpPort },
+                ssh_config: { host: sshHost, port: sshPort, username: sshUsername },
               }}
-              onUpdate={setProject}
+              onUpdate={(updatedProject) => {
+                setProject(updatedProject);
+                // When loading a project, also update the local state fields immediately
+                if (updatedProject.connection_type) setConnectionType(updatedProject.connection_type);
+                if (updatedProject.serial_config) {
+                  setSelectedPort(updatedProject.serial_config.port_name);
+                  setBaudRate(updatedProject.serial_config.baud_rate);
+                  setDataBits(updatedProject.serial_config.data_bits);
+                  setFlowControl(updatedProject.serial_config.flow_control);
+                  setParity(updatedProject.serial_config.parity);
+                  setStopBits(updatedProject.serial_config.stop_bits);
+                }
+                if (updatedProject.tcp_config) {
+                  setTcpHost(updatedProject.tcp_config.host);
+                  setTcpPort(updatedProject.tcp_config.port);
+                }
+                if (updatedProject.ssh_config) {
+                  setSshHost(updatedProject.ssh_config.host);
+                  setSshPort(updatedProject.ssh_config.port);
+                  setSshUsername(updatedProject.ssh_config.username);
+                }
+              }}
               onSend={handleSend}
               onEditSequence={setEditingSeq}
               onEditReaction={setEditingReaction}
