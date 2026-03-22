@@ -1,5 +1,7 @@
+use crate::ActiveReaction;
 use serde::{Deserialize, Serialize};
 use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, StopBits};
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::sync::{Arc, Mutex};
@@ -20,30 +22,28 @@ pub struct PortInfo {
     info: String,
 }
 
-use crate::ActiveReaction; // Added ActiveReaction
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SerialConfig {
     pub port_name: String,
     pub baud_rate: u32,
-    pub data_bits: u8,        // 5, 6, 7, 8
-    pub flow_control: String, // "None", "Software", "Hardware"
-    pub parity: String,       // "None", "Odd", "Even"
-    pub stop_bits: u8,        // 1, 2
+    pub data_bits: u8,
+    pub flow_control: String,
+    pub parity: String,
+    pub stop_bits: u8,
 }
 
-pub struct SerialManager {
-    read_port: Arc<Mutex<Option<Box<dyn SerialPort>>>>,
-    write_port: Arc<Mutex<Option<Box<dyn SerialPort>>>>,
-    is_reading: Arc<Mutex<bool>>,
-    reactions: Arc<Mutex<Vec<ActiveReaction>>>,
-    packet_timeout: Arc<Mutex<u64>>,
-    log_file: Arc<Mutex<Option<BufWriter<File>>>>,
-    log_format: Arc<Mutex<LogFormat>>,
+pub struct TabState {
+    pub read_port: Arc<Mutex<Option<Box<dyn SerialPort>>>>,
+    pub write_port: Arc<Mutex<Option<Box<dyn SerialPort>>>>,
+    pub is_reading: Arc<Mutex<bool>>,
+    pub reactions: Arc<Mutex<Vec<ActiveReaction>>>,
+    pub packet_timeout: Arc<Mutex<u64>>,
+    pub log_file: Arc<Mutex<Option<BufWriter<File>>>>,
+    pub log_format: Arc<Mutex<LogFormat>>,
 }
 
-impl SerialManager {
-    pub fn new() -> Self {
+impl TabState {
+    fn new() -> Self {
         Self {
             read_port: Arc::new(Mutex::new(None)),
             write_port: Arc::new(Mutex::new(None)),
@@ -54,19 +54,41 @@ impl SerialManager {
             log_format: Arc::new(Mutex::new(LogFormat::Both)),
         }
     }
+}
 
-    pub fn set_packet_timeout(&self, timeout: u64) {
-        let mut t_lock = self.packet_timeout.lock().unwrap();
+pub struct SerialManager {
+    tabs: Arc<Mutex<HashMap<String, Arc<TabState>>>>,
+}
+
+impl SerialManager {
+    pub fn new() -> Self {
+        Self {
+            tabs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn get_or_create_tab(&self, tab_id: &str) -> Arc<TabState> {
+        let mut tabs = self.tabs.lock().unwrap();
+        if !tabs.contains_key(tab_id) {
+            tabs.insert(tab_id.to_string(), Arc::new(TabState::new()));
+        }
+        tabs.get(tab_id).unwrap().clone()
+    }
+
+    pub fn set_packet_timeout(&self, tab_id: &str, timeout: u64) {
+        let tab = self.get_or_create_tab(tab_id);
+        let mut t_lock = tab.packet_timeout.lock().unwrap();
         *t_lock = timeout;
     }
 
-    pub fn set_reactions(&self, new_reactions: Vec<ActiveReaction>) {
-        let mut r_lock = self.reactions.lock().unwrap();
+    pub fn set_reactions(&self, tab_id: &str, new_reactions: Vec<ActiveReaction>) {
+        let tab = self.get_or_create_tab(tab_id);
+        let mut r_lock = tab.reactions.lock().unwrap();
         *r_lock = new_reactions;
     }
 
-    /// Start real-time logging to a file
-    pub fn start_logging(&self, path: &str, format: &str) -> Result<(), String> {
+    pub fn start_logging(&self, tab_id: &str, path: &str, format: &str) -> Result<(), String> {
+        let tab = self.get_or_create_tab(tab_id);
         let log_format = match format {
             "hex" => LogFormat::Hex,
             "ascii" => LogFormat::Ascii,
@@ -74,8 +96,8 @@ impl SerialManager {
         };
 
         eprintln!(
-            "[LOG] Starting logging to: {} with format: {:?}",
-            path, log_format
+            "[LOG] [{}] Starting logging to: {} with format: {:?}",
+            tab_id, path, log_format
         );
 
         let file = OpenOptions::new()
@@ -85,10 +107,8 @@ impl SerialManager {
             .map_err(|e| e.to_string())?;
 
         let mut writer = BufWriter::new(file);
-
-        // Write header
         let header = format!(
-            "=== Plan Terminal Log Started: {} ===\n",
+            "=== Plan Terminal Log Started ({}) ===\n",
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
         );
         writer
@@ -96,14 +116,13 @@ impl SerialManager {
             .map_err(|e| e.to_string())?;
         writer.flush().map_err(|e| e.to_string())?;
 
-        let mut lf = self.log_format.lock().unwrap();
+        let mut lf = tab.log_format.lock().unwrap();
         *lf = log_format;
         drop(lf);
 
-        let mut lfile = self.log_file.lock().unwrap();
+        let mut lfile = tab.log_file.lock().unwrap();
         *lfile = Some(writer);
 
-        // Write a test marker to confirm logging pipeline is working
         if let Some(ref mut w) = *lfile {
             let test_line = format!(
                 "[{}] --- Logging active, format: {:?}, waiting for data... ---\n",
@@ -114,17 +133,12 @@ impl SerialManager {
             let _ = w.flush();
         }
 
-        eprintln!(
-            "[LOG] Logging started successfully. log_file is Some: {}",
-            lfile.is_some()
-        );
-
         Ok(())
     }
 
-    /// Stop logging and close the file
-    pub fn stop_logging(&self) {
-        let mut lfile = self.log_file.lock().unwrap();
+    pub fn stop_logging(&self, tab_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        let mut lfile = tab.log_file.lock().unwrap();
         if let Some(ref mut writer) = *lfile {
             let footer = format!(
                 "=== Plan Terminal Log Ended: {} ===\n",
@@ -136,12 +150,12 @@ impl SerialManager {
         *lfile = None;
     }
 
-    /// Check if logging is active
-    pub fn is_logging(&self) -> bool {
-        self.log_file.lock().unwrap().is_some()
+    pub fn is_logging(&self, tab_id: &str) -> bool {
+        let tab = self.get_or_create_tab(tab_id);
+        let logging = tab.log_file.lock().unwrap().is_some();
+        logging
     }
 
-    /// Write a log entry
     fn write_log_entry(
         log_file: &Arc<Mutex<Option<BufWriter<File>>>>,
         log_format: &Arc<Mutex<LogFormat>>,
@@ -150,10 +164,7 @@ impl SerialManager {
     ) {
         let mut lfile = match log_file.lock() {
             Ok(l) => l,
-            Err(e) => {
-                eprintln!("[LOG] Failed to lock log_file: {}", e);
-                return;
-            }
+            Err(_) => return,
         };
         if let Some(ref mut writer) = *lfile {
             let format = *log_format.lock().unwrap();
@@ -174,7 +185,7 @@ impl SerialManager {
                             format!("<{:02X}>", b)
                         }
                     })
-                    .collect::<String>(),
+                    .collect(),
                 LogFormat::Both => {
                     let hex = data
                         .iter()
@@ -196,12 +207,8 @@ impl SerialManager {
             };
 
             let line = format!("[{}] {} {}\n", timestamp, direction, formatted_data);
-            if let Err(e) = writer.write_all(line.as_bytes()) {
-                eprintln!("[LOG] write_all failed: {}", e);
-            }
-            if let Err(e) = writer.flush() {
-                eprintln!("[LOG] flush failed: {}", e);
-            }
+            let _ = writer.write_all(line.as_bytes());
+            let _ = writer.flush();
         }
     }
 
@@ -229,26 +236,30 @@ impl SerialManager {
             .collect()
     }
 
-    pub fn open_port(&self, app: AppHandle, config: SerialConfig) -> Result<(), String> {
+    pub fn open_port(
+        &self,
+        app: AppHandle,
+        tab_id: &str,
+        config: SerialConfig,
+    ) -> Result<(), String> {
+        let tab = self.get_or_create_tab(tab_id);
+
         let data_bits = match config.data_bits {
             5 => DataBits::Five,
             6 => DataBits::Six,
             7 => DataBits::Seven,
             _ => DataBits::Eight,
         };
-
         let flow_control = match config.flow_control.as_str() {
             "Software" => FlowControl::Software,
             "Hardware" => FlowControl::Hardware,
             _ => FlowControl::None,
         };
-
         let parity = match config.parity.as_str() {
             "Odd" => Parity::Odd,
             "Even" => Parity::Even,
             _ => Parity::None,
         };
-
         let stop_bits = match config.stop_bits {
             2 => StopBits::Two,
             _ => StopBits::One,
@@ -261,51 +272,46 @@ impl SerialManager {
             .stop_bits(stop_bits)
             .timeout(Duration::from_millis(1));
 
-        // Sleep briefly to ensure previous drops and background threads have fully flushed to the OS.
         std::thread::sleep(Duration::from_millis(100));
 
         match builder.open() {
             Ok(port) => {
-                // Clone the port for separate read/write handles
                 let write_port = port.try_clone().map_err(|e| e.to_string())?;
 
-                let mut rp = self.read_port.lock().unwrap();
+                let mut rp = tab.read_port.lock().unwrap();
                 *rp = Some(port);
                 drop(rp);
 
-                let mut wp = self.write_port.lock().unwrap();
+                let mut wp = tab.write_port.lock().unwrap();
                 *wp = Some(write_port);
                 drop(wp);
 
-                // Start generic async reader
-                self.start_reader(app);
+                self.start_reader(app, tab_id.to_string(), tab);
                 Ok(())
             }
             Err(e) => Err(e.to_string()),
         }
     }
 
-    pub fn close_port(&self) {
-        let mut rp = self.read_port.lock().unwrap();
-        *rp = None;
-        drop(rp);
-
-        let mut wp = self.write_port.lock().unwrap();
-        *wp = None;
-        drop(wp);
-
-        let mut r_lock = self.is_reading.lock().unwrap();
-        *r_lock = false;
+    pub fn close_port(&self, tab_id: &str) {
+        let mut tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.remove(tab_id) {
+            let mut rp = tab.read_port.lock().unwrap();
+            *rp = None;
+            let mut wp = tab.write_port.lock().unwrap();
+            *wp = None;
+            let mut r_lock = tab.is_reading.lock().unwrap();
+            *r_lock = false;
+        }
     }
 
-    fn start_reader(&self, app: AppHandle) {
-        let read_port_clone = self.read_port.clone();
-        let write_port_clone = self.write_port.clone();
-        let is_reading = self.is_reading.clone();
-        let reactions_clone = self.reactions.clone();
-        let _packet_timeout_clone = self.packet_timeout.clone();
-        let log_file_clone = self.log_file.clone();
-        let log_format_clone = self.log_format.clone();
+    fn start_reader(&self, app: AppHandle, tab_id: String, tab: Arc<TabState>) {
+        let read_port = tab.read_port.clone();
+        let write_port = tab.write_port.clone();
+        let is_reading = tab.is_reading.clone();
+        let reactions = tab.reactions.clone();
+        let log_file = tab.log_file.clone();
+        let log_format = tab.log_format.clone();
 
         let mut reader_lock = is_reading.lock().unwrap();
         if *reader_lock {
@@ -324,7 +330,7 @@ impl SerialManager {
                 }
 
                 let read_result = {
-                    let mut p = read_port_clone.lock().unwrap();
+                    let mut p = read_port.lock().unwrap();
                     if let Some(port) = p.as_mut() {
                         match port.read(serial_buf.as_mut_slice()) {
                             Ok(t) => Some(t),
@@ -347,59 +353,50 @@ impl SerialManager {
                                 .unwrap()
                                 .as_millis();
 
-                            // Emit immediately: Zero Latency
-                            let _ = app.emit("serial-data", (data.clone(), ts, "RX"));
+                            let _ =
+                                app.emit("serial-data", (tab_id.clone(), data.clone(), ts, "RX"));
 
-                            // Write to log file if logging is active
-                            Self::write_log_entry(&log_file_clone, &log_format_clone, &data, "RX");
+                            Self::write_log_entry(&log_file, &log_format, &data, "RX");
 
-                            // Manage rolling buffer for reactions
                             rolling_buffer.extend_from_slice(&data);
                             if rolling_buffer.len() > 8192 {
                                 let len = rolling_buffer.len();
                                 rolling_buffer.drain(0..len - 8192);
                             }
 
-                            println!(
-                                "[SERIAL RX] Rolling buffer now has {} bytes: {:02X?}",
-                                rolling_buffer.len(),
-                                rolling_buffer
-                            );
-
                             loop {
                                 let mut matched = false;
                                 {
-                                    let reactions = reactions_clone.lock().unwrap();
-                                    for r in reactions.iter() {
+                                    let rxns = reactions.lock().unwrap();
+                                    for r in rxns.iter() {
                                         if !r.trigger_data.is_empty() {
                                             if let Some(pos) = rolling_buffer
                                                 .windows(r.trigger_data.len())
                                                 .position(|w| w == r.trigger_data)
                                             {
-                                                println!("[SERIAL AUTO-REPLY] Match found at pos {} for trigger {:02X?}", pos, r.trigger_data);
                                                 let ts = SystemTime::now()
                                                     .duration_since(UNIX_EPOCH)
                                                     .unwrap()
                                                     .as_millis();
-
                                                 let _ = app.emit(
                                                     "serial-data",
-                                                    (r.response_data.clone(), ts, "TX_AUTO"),
+                                                    (
+                                                        tab_id.clone(),
+                                                        r.response_data.clone(),
+                                                        ts,
+                                                        "TX_AUTO",
+                                                    ),
                                                 );
 
-                                                println!(
-                                                    "[SERIAL AUTO-REPLY] Sending response: {:02X?}",
-                                                    r.response_data
-                                                );
-                                                let mut wp = write_port_clone.lock().unwrap();
+                                                let mut wp = write_port.lock().unwrap();
                                                 if let Some(port) = wp.as_mut() {
                                                     let _ = port.write_all(&r.response_data);
                                                     let _ = port.flush();
                                                 }
 
                                                 Self::write_log_entry(
-                                                    &log_file_clone,
-                                                    &log_format_clone,
+                                                    &log_file,
+                                                    &log_format,
                                                     &r.response_data,
                                                     "TX_AUTO",
                                                 );
@@ -428,15 +425,15 @@ impl SerialManager {
         });
     }
 
-    pub fn write_data(&self, data: Vec<u8>) -> Result<(), String> {
+    pub fn write_data(&self, tab_id: &str, data: Vec<u8>) -> Result<(), String> {
+        let tab = self.get_or_create_tab(tab_id);
         use std::io::Write;
-        let mut p = self.write_port.lock().unwrap();
+        let mut p = tab.write_port.lock().unwrap();
         if let Some(port) = p.as_mut() {
             match port.write_all(&data) {
                 Ok(_) => {
                     let _ = port.flush();
-                    // Log TX data
-                    Self::write_log_entry(&self.log_file, &self.log_format, &data, "TX");
+                    Self::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),

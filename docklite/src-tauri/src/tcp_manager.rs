@@ -1,4 +1,5 @@
 use crate::ActiveReaction;
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Read, Write};
 use std::net::TcpStream;
@@ -7,15 +8,15 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 
-pub struct TcpManager {
-    stream: Arc<Mutex<Option<Arc<TcpStream>>>>,
-    is_reading: Arc<Mutex<bool>>,
-    log_file: Arc<Mutex<Option<BufWriter<File>>>>,
-    reactions: Arc<Mutex<Vec<ActiveReaction>>>,
+pub struct TabState {
+    pub stream: Arc<Mutex<Option<Arc<TcpStream>>>>,
+    pub is_reading: Arc<Mutex<bool>>,
+    pub log_file: Arc<Mutex<Option<BufWriter<File>>>>,
+    pub reactions: Arc<Mutex<Vec<ActiveReaction>>>,
 }
 
-impl TcpManager {
-    pub fn new() -> Self {
+impl TabState {
+    fn new() -> Self {
         Self {
             stream: Arc::new(Mutex::new(None)),
             is_reading: Arc::new(Mutex::new(false)),
@@ -23,14 +24,39 @@ impl TcpManager {
             reactions: Arc::new(Mutex::new(Vec::new())),
         }
     }
+}
 
-    pub fn connect(&self, app: AppHandle, host: &str, port: u16) -> Result<(), String> {
-        // Close any existing connection
-        self.disconnect();
-        std::thread::sleep(Duration::from_millis(100)); // Allow background thread to cleanly emit disconnected events
+pub struct TcpManager {
+    tabs: Arc<Mutex<HashMap<String, Arc<TabState>>>>,
+}
+
+impl TcpManager {
+    pub fn new() -> Self {
+        Self {
+            tabs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn get_or_create_tab(&self, tab_id: &str) -> Arc<TabState> {
+        let mut tabs = self.tabs.lock().unwrap();
+        if !tabs.contains_key(tab_id) {
+            tabs.insert(tab_id.to_string(), Arc::new(TabState::new()));
+        }
+        tabs.get(tab_id).unwrap().clone()
+    }
+
+    pub fn connect(
+        &self,
+        app: AppHandle,
+        tab_id: &str,
+        host: &str,
+        port: u16,
+    ) -> Result<(), String> {
+        self.disconnect(tab_id);
+        std::thread::sleep(Duration::from_millis(100));
 
         let addr = format!("{}:{}", host, port);
-        eprintln!("[TCP] Connecting to {}", addr);
+        eprintln!("[TCP] [{}] Connecting to {}", tab_id, addr);
 
         let stream = TcpStream::connect_timeout(
             &addr
@@ -40,92 +66,87 @@ impl TcpManager {
         )
         .map_err(|e| format!("Connection failed: {}", e))?;
 
-        // Socket natively blocks forever on read until data arrives or shutdown() is called
-
-        // Ensure writes have a finite timeout to expose kernel drops
         stream
             .set_write_timeout(Some(Duration::from_secs(2)))
             .map_err(|e| e.to_string())?;
-
-        // Ensure socket blocks on write buffer flushes
         stream.set_nonblocking(false).map_err(|e| e.to_string())?;
-
-        // Disable Nagle's algorithm to force instantaneous transmission of small auto-replies
         stream.set_nodelay(true).map_err(|e| e.to_string())?;
 
         let shared_stream = Arc::new(stream);
+        let tab = self.get_or_create_tab(tab_id);
 
         {
-            let mut s = self.stream.lock().unwrap();
+            let mut s = tab.stream.lock().unwrap();
             *s = Some(shared_stream.clone());
         }
 
-        // Start reader thread
-        self.start_reader(app, shared_stream);
+        self.start_reader(app, tab_id.to_string(), tab, shared_stream);
 
-        eprintln!("[TCP] Connected to {}", addr);
+        eprintln!("[TCP] [{}] Connected", tab_id);
         Ok(())
     }
 
-    pub fn set_reactions(&self, new_reactions: Vec<ActiveReaction>) {
-        let mut r_lock = self.reactions.lock().unwrap();
+    pub fn set_reactions(&self, tab_id: &str, new_reactions: Vec<ActiveReaction>) {
+        let tab = self.get_or_create_tab(tab_id);
+        let mut r_lock = tab.reactions.lock().unwrap();
         *r_lock = new_reactions;
     }
 
-    pub fn disconnect(&self) {
-        {
-            let mut r = self.is_reading.lock().unwrap();
-            *r = false;
-        }
-        // Give reader thread time to exit
-        thread::sleep(Duration::from_millis(50));
-        {
-            let mut s = self.stream.lock().unwrap();
-            if let Some(stream_arc) = s.as_ref() {
-                let s_ref = stream_arc.as_ref();
-                let _ = s_ref.shutdown(std::net::Shutdown::Both);
+    pub fn disconnect(&self, tab_id: &str) {
+        let mut tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.remove(tab_id) {
+            {
+                let mut r = tab.is_reading.lock().unwrap();
+                *r = false;
             }
-            *s = None;
+            thread::sleep(Duration::from_millis(50));
+            {
+                let mut s = tab.stream.lock().unwrap();
+                if let Some(stream_arc) = s.as_ref() {
+                    let _ = stream_arc.shutdown(std::net::Shutdown::Both);
+                }
+                *s = None;
+            }
+            eprintln!("[TCP] [{}] Disconnected", tab_id);
         }
-        eprintln!("[TCP] Disconnected");
     }
 
-    pub fn is_connected(&self) -> bool {
-        self.stream.lock().unwrap().is_some()
+    pub fn is_connected(&self, tab_id: &str) -> bool {
+        let tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.get(tab_id) {
+            tab.stream.lock().unwrap().is_some()
+        } else {
+            false
+        }
     }
 
-    pub fn write_data(&self, data: Vec<u8>) -> Result<(), String> {
-        println!(
-            "[TCP MANUAL TX] Attempting to send {} bytes: {:02X?}",
-            data.len(),
-            data
-        );
-        let s = self.stream.lock().unwrap();
+    pub fn write_data(&self, tab_id: &str, data: Vec<u8>) -> Result<(), String> {
+        let tab = self.get_or_create_tab(tab_id);
+        let s = tab.stream.lock().unwrap();
         if let Some(stream_arc) = s.as_ref() {
             let mut s_ref = &**stream_arc;
             match s_ref.write_all(&data) {
                 Ok(_) => {
-                    println!("[TCP MANUAL TX] Successfully wrote to socket");
-                    if let Err(e) = s_ref.flush() {
-                        eprintln!("[TCP MANUAL TX] Flush error: {}", e);
-                    }
+                    let _ = s_ref.flush();
                     Ok(())
                 }
-                Err(e) => {
-                    eprintln!("[TCP MANUAL TX] Socket write error: {}", e);
-                    Err(format!("TCP write failed: {}", e))
-                }
+                Err(e) => Err(format!("TCP write failed: {}", e)),
             }
         } else {
-            eprintln!("[TCP MANUAL TX] Not connected!");
             Err("Not connected".to_string())
         }
     }
 
-    fn start_reader(&self, app: AppHandle, read_stream: Arc<TcpStream>) {
-        let is_reading = self.is_reading.clone();
-        let reactions_clone = self.reactions.clone();
-        let stream_clone = self.stream.clone();
+    fn start_reader(
+        &self,
+        app: AppHandle,
+        tab_id: String,
+        tab: Arc<TabState>,
+        read_stream: Arc<TcpStream>,
+    ) {
+        let is_reading = tab.is_reading.clone();
+        let reactions = tab.reactions.clone();
+        let stream_clone = tab.stream.clone();
 
         {
             let mut r = is_reading.lock().unwrap();
@@ -147,9 +168,7 @@ impl TcpManager {
                 let mut rs_ref = read_stream.as_ref();
                 match rs_ref.read(&mut buf) {
                     Ok(0) => {
-                        // Connection closed by remote
-                        eprintln!("[TCP] Connection closed by remote");
-                        let _ = app.emit("tcp-disconnected", ());
+                        let _ = app.emit("tcp-disconnected", tab_id.clone());
                         break;
                     }
                     Ok(n) => {
@@ -159,78 +178,50 @@ impl TcpManager {
                             .unwrap()
                             .as_millis();
 
-                        // Emit to frontend (same event format as serial)
-                        let _ = app.emit("serial-data", (data.clone(), ts, "RX"));
+                        let _ = app.emit("serial-data", (tab_id.clone(), data.clone(), ts, "RX"));
 
-                        // Manage rolling buffer for reactions
                         rolling_buffer.extend_from_slice(&data);
                         if rolling_buffer.len() > 8192 {
                             let len = rolling_buffer.len();
                             rolling_buffer.drain(0..len - 8192);
                         }
 
-                        println!(
-                            "[TCP RX] Rolling buffer now has {} bytes: {:02X?}",
-                            rolling_buffer.len(),
-                            rolling_buffer
-                        );
-
-                        // Process Auto-Reactions (if any match the trigger)
                         loop {
                             let mut matched = false;
                             {
-                                let reactions = reactions_clone.lock().unwrap();
-                                for r in reactions.iter() {
+                                let rxns = reactions.lock().unwrap();
+                                for r in rxns.iter() {
                                     if !r.trigger_data.is_empty() {
                                         if let Some(pos) = rolling_buffer
                                             .windows(r.trigger_data.len())
                                             .position(|w| w == r.trigger_data)
                                         {
-                                            println!("[TCP AUTO-REPLY] Match found at pos {} for trigger {:02X?}", pos, r.trigger_data);
                                             let start_ts = SystemTime::now()
                                                 .duration_since(UNIX_EPOCH)
                                                 .unwrap()
                                                 .as_millis();
-
-                                            // Emit to UI as TX_AUTO
                                             let _ = app.emit(
                                                 "serial-data",
-                                                (r.response_data.clone(), start_ts, "TX_AUTO"),
+                                                (
+                                                    tab_id.clone(),
+                                                    r.response_data.clone(),
+                                                    start_ts,
+                                                    "TX_AUTO",
+                                                ),
                                             );
 
-                                            // Send the auto-reply over the TCP socket blocking
-                                            println!(
-                                                "[TCP AUTO-REPLY] Sending response: {:02X?}",
-                                                r.response_data
-                                            );
                                             if let Some(w_stream_arc) =
                                                 stream_clone.lock().unwrap().as_ref()
                                             {
                                                 let mut w_stream = &**w_stream_arc;
-                                                match w_stream.write_all(&r.response_data) {
-                                                    Ok(_) => {
-                                                        println!("[TCP AUTO-REPLY] Successfully wrote to socket");
-                                                        if let Err(e) = w_stream.flush() {
-                                                            eprintln!(
-                                                                "[TCP AUTO-REPLY] Flush error: {}",
-                                                                e
-                                                            );
-                                                        }
-                                                    }
-                                                    Err(e) => eprintln!(
-                                                        "[TCP AUTO-REPLY] Socket write error: {}",
-                                                        e
-                                                    ),
-                                                }
-                                            } else {
-                                                eprintln!("[TCP AUTO-REPLY] Failed to acquire writable stream lock!");
+                                                let _ = w_stream.write_all(&r.response_data);
+                                                let _ = w_stream.flush();
                                             }
 
-                                            // Truncate the buffer segment up to the reaction match
                                             let match_end = pos + r.trigger_data.len();
                                             rolling_buffer.drain(0..match_end);
                                             matched = true;
-                                            break; // restart loop so changes map safely
+                                            break;
                                         }
                                     }
                                 }
@@ -240,9 +231,8 @@ impl TcpManager {
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("[TCP] Read error: {}", e);
-                        let _ = app.emit("tcp-disconnected", ());
+                    Err(_) => {
+                        let _ = app.emit("tcp-disconnected", tab_id.clone());
                         break;
                     }
                 }
