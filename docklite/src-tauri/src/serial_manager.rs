@@ -261,6 +261,9 @@ impl SerialManager {
             .stop_bits(stop_bits)
             .timeout(Duration::from_millis(1));
 
+        // Sleep briefly to ensure previous drops and background threads have fully flushed to the OS.
+        std::thread::sleep(Duration::from_millis(100));
+
         match builder.open() {
             Ok(port) => {
                 // Clone the port for separate read/write handles

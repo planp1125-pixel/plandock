@@ -394,7 +394,7 @@ function App() {
           <img src={logo} alt="Plan Terminal" className="w-7 h-7" />
           <div className="flex items-baseline gap-2">
             <h1 className="text-lg font-bold">Plan Terminal</h1>
-            <span className="text-xs text-muted-foreground font-medium">v0.4.6</span>
+            <span className="text-xs text-muted-foreground font-medium">v0.4.7</span>
           </div>
           {project.name !== "Plan Terminal" && (
             <span className="text-xs px-2 py-0.5 bg-muted rounded text-muted-foreground">{project.name}</span>

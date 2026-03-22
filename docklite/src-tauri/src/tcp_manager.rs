@@ -27,6 +27,7 @@ impl TcpManager {
     pub fn connect(&self, app: AppHandle, host: &str, port: u16) -> Result<(), String> {
         // Close any existing connection
         self.disconnect();
+        std::thread::sleep(Duration::from_millis(100)); // Allow background thread to cleanly emit disconnected events
 
         let addr = format!("{}:{}", host, port);
         eprintln!("[TCP] Connecting to {}", addr);

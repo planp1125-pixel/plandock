@@ -32,6 +32,7 @@ impl SshManager {
         auth_secret: &str,
     ) -> Result<(), String> {
         self.disconnect(); // Ensure clean slate
+        std::thread::sleep(Duration::from_millis(100)); // Allow background thread to cleanly emit disconnected events
 
         let addr = format!("{}:{}", host, port);
         eprintln!("[SSH] Connecting to {}", addr);

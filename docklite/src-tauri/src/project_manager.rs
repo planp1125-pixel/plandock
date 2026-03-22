@@ -486,7 +486,7 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
         name: project_name,
         send_sequences: sequences,
         reactions,
-        file_path: Some(path.to_string()),
+        file_path: None, // Set to None so "Save" will force a "Save As" as a new .plant file
         connection_type: None,
         serial_config,
         tcp_config: None,

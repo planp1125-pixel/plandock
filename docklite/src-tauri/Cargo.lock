@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "docklite"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "chrono",
  "hostname",
