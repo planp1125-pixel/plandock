@@ -33,7 +33,7 @@ function SortableSeqItem({ seq, isActivelySending, onSend, onEdit, onStartPeriod
     isActivelySending: boolean;
     onSend: (seq: Sequence) => void;
     onEdit: (seq: Sequence) => void;
-    onStartPeriodic: (id: string) => void;
+    onStartPeriodic: (seq: Sequence) => void;
     onStopPeriodic: (id: string) => void;
     connected: boolean;
 }) {
@@ -58,7 +58,7 @@ function SortableSeqItem({ seq, isActivelySending, onSend, onEdit, onStartPeriod
                             <Square className="w-3 h-3 fill-current text-white" />
                         </button>
                     ) : seq.periodic_enabled ? (
-                        <button onClick={(e) => { e.stopPropagation(); connected ? onStartPeriodic(seq.id) : alert("Connect first!"); }} className="p-0.5 hover:bg-blue-600 rounded" title="Start">
+                        <button onClick={(e) => { e.stopPropagation(); connected ? onStartPeriodic(seq) : alert("Connect first!"); }} className="p-0.5 hover:bg-blue-600 rounded" title="Start">
                             <FastForward className="w-3 h-3 fill-current text-blue-500" />
                         </button>
                     ) : (
@@ -116,7 +116,7 @@ interface Props {
     onEditReaction: (r: Reaction) => void;
     connected: boolean;
     activePeriodicIds: Set<string>;
-    onStartPeriodic: (seqId: string) => void;
+    onStartPeriodic: (seq: Sequence) => void;
     onStopPeriodic: (seqId: string) => void;
 }
 

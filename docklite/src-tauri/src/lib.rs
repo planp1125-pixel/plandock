@@ -2,15 +2,24 @@ mod license;
 mod project_manager;
 mod tcp_manager;
 mod serial_manager;
-mod ssh_manager; // Added ssh_manager module
+mod ssh_manager;
+mod log_utils;
 use license::{LicenseManager, LicenseStatus};
 use project_manager::{load_project, save_project, import_ptp_file, Project, Reaction};
 use serial_manager::{PortInfo, SerialConfig, SerialManager};
 use tcp_manager::TcpManager;
 use ssh_manager::SshManager;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
 use tauri::{Manager, State, AppHandle, Emitter};
+
+/// Global playback control per tab: (is_paused, stop_flag)
+static PLAYBACK_CONTROLS: std::sync::LazyLock<Mutex<HashMap<String, (Arc<AtomicBool>, Arc<AtomicBool>)>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ActiveReaction {
@@ -121,12 +130,19 @@ fn start_logging(
     ssh_manager: State<'_, Arc<SshManager>>, 
     tab_id: String, 
     path: String,
-    conn_type: String
+    conn_type: String,
+    format: Option<String>
 ) -> Result<(), String> {
+    let fmt = match format.as_deref() {
+        Some("ascii") => log_utils::LogFormat::Ascii,
+        Some("hex") => log_utils::LogFormat::Hex,
+        Some("both") => log_utils::LogFormat::Both,
+        _ => log_utils::LogFormat::Jsonl,
+    };
     match conn_type.as_str() {
-        "Serial" | "serial" => serial_manager.start_logging(&tab_id, path),
-        "TCP" | "tcp" => tcp_manager.start_logging(&tab_id, path),
-        "SSH" | "ssh" => ssh_manager.start_logging(&tab_id, path),
+        "Serial" | "serial" => serial_manager.start_logging(&tab_id, path, fmt),
+        "TCP" | "tcp" => tcp_manager.start_logging(&tab_id, path, fmt),
+        "SSH" | "ssh" => ssh_manager.start_logging(&tab_id, path, fmt),
         _ => Err("Unknown connection type for logging".to_string())
     }
 }
@@ -160,6 +176,59 @@ fn is_logging(
         "TCP" | "tcp" => tcp_manager.is_logging(&tab_id),
         "SSH" | "ssh" => ssh_manager.is_logging(&tab_id),
         _ => false
+    }
+}
+
+#[tauri::command]
+fn start_periodic_sequence(
+    app: AppHandle,
+    serial_manager: State<'_, Arc<SerialManager>>,
+    tcp_manager: State<'_, Arc<TcpManager>>,
+    ssh_manager: State<'_, Arc<SshManager>>,
+    tab_id: String,
+    seq_id: String,
+    data: Vec<u8>,
+    interval_ms: u64,
+    conn_type: String,
+) {
+    match conn_type.as_str() {
+        "Serial" | "serial" => serial_manager.start_periodic(&tab_id, seq_id, data, interval_ms, app),
+        "TCP" | "tcp" => tcp_manager.start_periodic(&tab_id, seq_id, data, interval_ms, app),
+        "SSH" | "ssh" => ssh_manager.start_periodic(&tab_id, seq_id, data, interval_ms, app),
+        _ => {}
+    }
+}
+
+#[tauri::command]
+fn stop_periodic_sequence(
+    serial_manager: State<'_, Arc<SerialManager>>,
+    tcp_manager: State<'_, Arc<TcpManager>>,
+    ssh_manager: State<'_, Arc<SshManager>>,
+    tab_id: String,
+    seq_id: String,
+    conn_type: String,
+) {
+    match conn_type.as_str() {
+        "Serial" | "serial" => serial_manager.stop_periodic(&tab_id, &seq_id),
+        "TCP" | "tcp" => tcp_manager.stop_periodic(&tab_id, &seq_id),
+        "SSH" | "ssh" => ssh_manager.stop_periodic(&tab_id, &seq_id),
+        _ => {}
+    }
+}
+
+#[tauri::command]
+fn stop_all_periodic_sequences(
+    serial_manager: State<'_, Arc<SerialManager>>,
+    tcp_manager: State<'_, Arc<TcpManager>>,
+    ssh_manager: State<'_, Arc<SshManager>>,
+    tab_id: String,
+    conn_type: String,
+) {
+    match conn_type.as_str() {
+        "Serial" | "serial" => serial_manager.stop_all_periodic(&tab_id),
+        "TCP" | "tcp" => tcp_manager.stop_all_periodic(&tab_id),
+        "SSH" | "ssh" => ssh_manager.stop_all_periodic(&tab_id),
+        _ => {}
     }
 }
 
@@ -253,6 +322,15 @@ fn is_ssh_connected(ssh_manager: State<'_, Arc<SshManager>>, tab_id: String) -> 
 
 #[tauri::command]
 fn play_recording(app: AppHandle, tab_id: String, path: String, speed_multiplier: f64) -> Result<(), String> {
+    // Create fresh pause=false, stop=false flags for this playback
+    let is_paused = Arc::new(AtomicBool::new(false));
+    let is_stopped = Arc::new(AtomicBool::new(false));
+
+    {
+        let mut controls = PLAYBACK_CONTROLS.lock().unwrap();
+        controls.insert(tab_id.clone(), (is_paused.clone(), is_stopped.clone()));
+    }
+
     std::thread::spawn(move || {
         let file = match std::fs::File::open(&path) {
             Ok(f) => f,
@@ -262,51 +340,97 @@ fn play_recording(app: AppHandle, tab_id: String, path: String, speed_multiplier
             }
         };
         let reader = std::io::BufReader::new(file);
-        
+
         let _ = app.emit("playback-started", tab_id.clone());
-        
+
         use std::io::BufRead;
-        let mut last_ts = 0;
-        
+        let mut last_ts = 0u64;
+
         for line in reader.lines() {
+            // Check stop flag before each entry
+            if is_stopped.load(Ordering::Relaxed) {
+                break;
+            }
+
             if let Ok(l) = line {
                 let v: serde_json::Value = match serde_json::from_str(&l) {
                     Ok(val) => val,
                     Err(_) => continue,
                 };
-                
+
                 let ts = v["ts"].as_u64().unwrap_or(0);
                 let dir = v["dir"].as_str().unwrap_or("RX");
-                
+
                 let data_array = match v["data"].as_array() {
                     Some(arr) => arr,
                     None => continue,
                 };
-                
+
                 let mut bytes = Vec::new();
                 for b in data_array {
                     if let Some(num) = b.as_u64() {
                         bytes.push(num as u8);
                     }
                 }
-                
+
+                // Wait for the correct inter-packet delay, checking pause/stop every 50ms
                 if last_ts > 0 && ts > last_ts && speed_multiplier > 0.0 {
                     let diff = ts - last_ts;
-                    let sleep_ms = (diff as f64 / speed_multiplier) as u64;
-                    if sleep_ms > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                    let mut remaining_ms = (diff as f64 / speed_multiplier) as u64;
+
+                    while remaining_ms > 0 {
+                        if is_stopped.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        // While paused, keep waiting without consuming the remaining time
+                        while is_paused.load(Ordering::Relaxed) {
+                            if is_stopped.load(Ordering::Relaxed) { break; }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        if is_stopped.load(Ordering::Relaxed) { break; }
+
+                        let chunk = remaining_ms.min(50);
+                        std::thread::sleep(std::time::Duration::from_millis(chunk));
+                        remaining_ms = remaining_ms.saturating_sub(chunk);
                     }
+
+                    if is_stopped.load(Ordering::Relaxed) { break; }
                 }
                 last_ts = ts;
-                
+
                 let _ = app.emit("serial-data", (tab_id.clone(), bytes, ts as u128, dir));
             }
         }
-        
+
+        // Clean up control state
+        PLAYBACK_CONTROLS.lock().unwrap().remove(&tab_id);
         let _ = app.emit("playback-ended", tab_id.clone());
     });
     Ok(())
 }
+
+#[tauri::command]
+fn pause_recording(tab_id: String) {
+    if let Some((paused, _)) = PLAYBACK_CONTROLS.lock().unwrap().get(&tab_id) {
+        paused.store(true, Ordering::Relaxed);
+    }
+}
+
+#[tauri::command]
+fn resume_recording(tab_id: String) {
+    if let Some((paused, _)) = PLAYBACK_CONTROLS.lock().unwrap().get(&tab_id) {
+        paused.store(false, Ordering::Relaxed);
+    }
+}
+
+#[tauri::command]
+fn stop_recording(tab_id: String) {
+    if let Some((_, stopped)) = PLAYBACK_CONTROLS.lock().unwrap().get(&tab_id) {
+        stopped.store(true, Ordering::Relaxed);
+    }
+}
+
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -350,7 +474,13 @@ pub fn run() {
             disconnect_ssh,
             send_ssh_data,
             is_ssh_connected,
-            play_recording
+            play_recording,
+            start_periodic_sequence,
+            stop_periodic_sequence,
+            stop_all_periodic_sequences,
+            pause_recording,
+            resume_recording,
+            stop_recording
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

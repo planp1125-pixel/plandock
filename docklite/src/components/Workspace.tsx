@@ -8,9 +8,11 @@ import { SequenceEditor } from "./SequenceEditor";
 import { ReactionEditor } from "./ReactionEditor";
 import { Project, Sequence, Reaction, PortInfo } from "../types";
 import { parseData } from "../utils";
-import { RotateCw, Settings, ChevronDown, LineChart as LineChartIcon } from "lucide-react";
+import { RotateCw, Settings, ChevronDown, LineChart as LineChartIcon, Download, FileText } from "lucide-react";
 import { ChartWindow } from "./ChartWindow";
 import { ChartConfig, ChartDataPoint, extractValue } from "../chart_utils";
+import { useLicense, FREE_LIMITS } from "../contexts/LicenseContext";
+import { handleTerminalExport } from "../utils/export";
 
 export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange, onProjectNameChange }: { tabId: string, isActive: boolean, darkMode: boolean, onConnectionStatusChange: (tabId: string, isConnected: boolean, label: string) => void, onProjectNameChange: (tabId: string, name: string) => void }) {
   const [project, setProject] = useState<Project>({
@@ -24,11 +26,23 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
   const incomingQueue = useRef<{ bytes: number[], ts: number, dir: string }[]>([]);
   const lastRef = useRef<{ id: string, timestamp: number, direction: string } | null>(null);
   const [connected, setConnected] = useState(false);
+  const [activeProtocol, setActiveProtocol] = useState<string | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [editingSeq, setEditingSeq] = useState<Sequence | null>(null);
   const [editingReaction, setEditingReaction] = useState<Reaction | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [isRecording, setIsRecording] = useState(false);
+
+  // File Logging and Export State
+  const { isPro } = useLicense();
+  const [exportAscii, setExportAscii] = useState(false);
+  const [exportHex, setExportHex] = useState(false);
+  const [exportBin, setExportBin] = useState(false);
+  const [exportDec, setExportDec] = useState(false);
+  const [showExportOptions, setShowExportOptions] = useState(false);
+  const [showLogOptions, setShowLogOptions] = useState(false);
+  const [isLiveLogging, setIsLiveLogging] = useState(false);
+  const lastLoggedIndexRef = useRef(0);
 
   // Chart State
   const [isChartOpen, setIsChartOpen] = useState(false);
@@ -38,6 +52,10 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
   // Refs for Chart to access latest state in listeners
   const chartConfigsRef = useRef<ChartConfig[]>([]);
   const chartDataQueue = useRef<ChartDataPoint[]>([]);
+
+  // Playback State
+  const [isPlayingBack, setIsPlayingBack] = useState(false);
+  const [isPlaybackPaused, setIsPlaybackPaused] = useState(false);
 
   // Update refs when state changes
   useEffect(() => {
@@ -79,7 +97,8 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
     } else {
       const selectedPath = await save({
         filters: [{ name: 'Plan Terminal Session', extensions: ['plog'] }],
-        title: 'Save Session Recording (.plog)'
+        title: 'Save Session Recording (.plog)',
+        defaultPath: `session_${Date.now()}.plog`
       });
       if (selectedPath) {
         try {
@@ -101,6 +120,7 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
 
     if (selectedPath && typeof selectedPath === 'string') {
       try {
+        setIsPlaybackPaused(false);
         await invoke("play_recording", { tabId, path: selectedPath, speedMultiplier: 1.0 });
       } catch (e) {
         alert("Playback failed: " + String(e));
@@ -108,9 +128,55 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
     }
   };
 
+  const handlePausePlayback = async () => {
+    if (isPlaybackPaused) {
+      await invoke("resume_recording", { tabId });
+      setIsPlaybackPaused(false);
+    } else {
+      await invoke("pause_recording", { tabId });
+      setIsPlaybackPaused(true);
+    }
+  };
+
+  const handleStopPlayback = async () => {
+    await invoke("stop_recording", { tabId });
+    setIsPlayingBack(false);
+    setIsPlaybackPaused(false);
+  };
+
+  const handleStartLiveLogging = async () => {
+    try {
+      const path = await save({
+        filters: [{ name: 'Log Files', extensions: ['log', 'txt'] }],
+        defaultPath: `plan_terminal_${Date.now()}.log`
+      });
+      if (path) {
+        const format = exportAscii ? 'ascii' : exportHex ? 'hex' : 'both';
+        await invoke('start_logging', { tabId, path, connType: activeProtocol, format });
+        lastLoggedIndexRef.current = logs.length;
+        setIsLiveLogging(true);
+        setShowLogOptions(false);
+      }
+    } catch (error) {
+      console.error(error);
+      alert("Failed to start logging: " + String(error));
+    }
+  };
+
+  const handleStopLiveLogging = async () => {
+    try {
+      await invoke('stop_logging', { tabId, connType: activeProtocol });
+    } catch (e) {
+      console.error(e);
+    }
+    setIsLiveLogging(false);
+  };
+
   useEffect(() => {
     refreshPorts();
   }, []);
+
+
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -264,6 +330,13 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
       setChartData([]);
       incomingQueue.current = [];
       lastRef.current = null;
+      setIsPlayingBack(true);
+    });
+
+    const unlistenPlaybackEnded = listen<string>('playback-ended', (event) => {
+      if (event.payload !== tabId) return;
+      setIsPlayingBack(false);
+      setIsPlaybackPaused(false);
     });
 
     return () => {
@@ -271,23 +344,31 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
       unlistenTcpDisconnect.then(f => f());
       unlistenSshDisconnect.then(f => f());
       unlistenPlaybackStart.then(f => f());
+      unlistenPlaybackEnded.then(f => f());
     };
   }, []);
 
-  // Periodic Intervals logic ...
-  // Track active periodic intervals (by sequence ID)
-  const periodicIntervalsRef = useRef<Map<string, number>>(new Map());
-
-  // Track which sequences are ACTIVELY running (separate from periodic_enabled config)
+  // Periodic Intervals — handled entirely by native Rust OS threads, no setInterval
   const [activePeriodicIds, setActivePeriodicIds] = useState<Set<string>>(new Set());
 
-  // Start periodic sending for a sequence
-  const startPeriodic = (seqId: string) => {
-    setActivePeriodicIds(prev => new Set(prev).add(seqId));
+  const startPeriodic = (seq: Sequence) => {
+    const bytes = parseData(seq.data, seq.view_mode);
+    invoke("start_periodic_sequence", {
+      tabId,
+      seqId: seq.id,
+      data: bytes,
+      intervalMs: seq.periodic_interval || 1000,
+      connType: connectionType,
+    }).catch(e => console.error("start_periodic_sequence failed:", e));
+    setActivePeriodicIds(prev => new Set(prev).add(seq.id));
   };
 
-  // Stop periodic sending for a sequence  
   const stopPeriodic = (seqId: string) => {
+    invoke("stop_periodic_sequence", {
+      tabId,
+      seqId,
+      connType: connectionType,
+    }).catch(e => console.error("stop_periodic_sequence failed:", e));
     setActivePeriodicIds(prev => {
       const next = new Set(prev);
       next.delete(seqId);
@@ -295,45 +376,14 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
     });
   };
 
-  // Periodic send management - only runs for sequences in activePeriodicIds
+  // Stop all periodic sequences when disconnected
   useEffect(() => {
-    const activeIntervals = periodicIntervalsRef.current;
-
-    // Start intervals for sequences that are in activePeriodicIds
-    project.send_sequences.forEach((seq: Sequence) => {
-      if (activePeriodicIds.has(seq.id) && connected && !activeIntervals.has(seq.id)) {
-        const interval = window.setInterval(async () => {
-          const bytes = parseData(seq.data, seq.view_mode);
-          try {
-            if (connectionType === 'Serial') {
-              await invoke("send_serial_data", { tabId, data: bytes });
-            } else if (connectionType === 'TCP') {
-              await invoke("send_tcp_data", { tabId, data: bytes });
-            } else if (connectionType === 'SSH') {
-              await invoke("send_ssh_data", { tabId, data: bytes });
-            }
-            incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
-          } catch (e) {
-            console.error("Periodic send failed:", e);
-          }
-        }, seq.periodic_interval || 1000);
-        activeIntervals.set(seq.id, interval);
-      }
-    });
-
-    // Stop intervals for sequences not in activePeriodicIds or disconnected
-    activeIntervals.forEach((interval, seqId) => {
-      if (!activePeriodicIds.has(seqId) || !connected) {
-        clearInterval(interval);
-        activeIntervals.delete(seqId);
-      }
-    });
-
-    return () => {
-      // Cleanup all on unmount
-      activeIntervals.forEach(interval => clearInterval(interval));
-    };
-  }, [project.send_sequences, connected, activePeriodicIds, connectionType]);
+    if (!connected) {
+      invoke("stop_all_periodic_sequences", { tabId, connType: connectionType || "Serial" })
+        .catch(() => { });
+      setActivePeriodicIds(new Set());
+    }
+  }, [connected]);
 
 
   const handleSend = async (seq: Sequence) => {
@@ -383,6 +433,7 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
           auth_secret: sshAuthSecret
         });
       }
+      setActiveProtocol(connectionType);
       setConnected(true); onConnectionStatusChange(tabId, true, connectionType === 'Serial' ? selectedPort : (connectionType === 'TCP' ? tcpHost : sshHost));
     } catch (e) {
       alert("Connection failed: " + e);
@@ -393,14 +444,17 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
 
   const handleDisconnect = async () => {
     try {
-      if (connectionType === 'Serial') {
+      const protocolToDisconnect = activeProtocol || connectionType;
+      if (protocolToDisconnect === 'Serial') {
         await invoke("close_serial_port", { tabId });
-      } else if (connectionType === 'TCP') {
+      } else if (protocolToDisconnect === 'TCP') {
         await invoke("disconnect_tcp", { tabId });
-      } else if (connectionType === 'SSH') {
+      } else if (protocolToDisconnect === 'SSH') {
         await invoke("disconnect_ssh", { tabId });
       }
-      setConnected(false); onConnectionStatusChange(tabId, false, '');
+      setConnected(false);
+      setActiveProtocol(null);
+      onConnectionStatusChange(tabId, false, '');
     } catch (e) {
       console.error(e);
     }
@@ -434,32 +488,88 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
           {/* Separator */}
           <div className="w-px h-5 bg-border mx-0.5" />
 
-          {/* Session Recording Controls */}
-          {connected && (
+          {/* Legacy TXT/Log Buttons */}
+          <div className="relative flex items-center">
             <button
-              className={`text-white rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors ${isRecording ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-rose-600 hover:bg-rose-700'}`}
-              onClick={handleToggleRecord}
-              title={isRecording ? "Stop Recording Session" : "Record Session to .plog file"}
+              onClick={() => isLiveLogging ? handleStopLiveLogging() : setShowLogOptions(!showLogOptions)}
+              className={`p-1.5 rounded transition-colors ${isLiveLogging ? 'text-red-400 bg-red-900/40 animate-pulse' : 'hover:bg-accent'}`}
+              title={isLiveLogging ? "Stop Logging" : "Start Logging to File (.txt/.log)"}
+            >
+              <FileText className="w-4 h-4" />
+              {isLiveLogging && <span className="absolute text-[8px] font-bold bottom-0 right-0">LOG</span>}
+            </button>
+            {showLogOptions && !isLiveLogging && (
+              <div className="absolute left-0 top-full mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 p-2 w-48 text-left">
+                <div className="text-[10px] text-zinc-400 font-semibold mb-1 uppercase">Log Format</div>
+                <div className="text-[10px] text-zinc-500 mb-2">Select format. Default = ASCII + HEX combined.</div>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                  <input type="checkbox" checked={exportAscii} onChange={e => setExportAscii(e.target.checked)} />
+                  ASCII only
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                  <input type="checkbox" checked={exportHex} onChange={e => setExportHex(e.target.checked)} />
+                  HEX only
+                </label>
+                <button onClick={handleStartLiveLogging} className="w-full mt-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-medium">Start Logging</button>
+              </div>
+            )}
+          </div>
+
+          <div className="relative flex items-center pr-1">
+            <button onClick={() => setShowExportOptions(!showExportOptions)} className={`p-1.5 rounded transition-colors ${showExportOptions ? 'bg-accent' : 'hover:bg-accent'}`} title="Export Logs">
+              <Download className="w-4 h-4" />
+            </button>
+            {showExportOptions && (
+              <div className="absolute left-0 top-full mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 p-2 w-48 text-left">
+                <div className="text-[10px] text-zinc-400 font-semibold mb-1 uppercase">Export Formats</div>
+                <div className="text-[10px] text-zinc-500 mb-2">Select formats for separate files. None = combined default.</div>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                  <input type="checkbox" checked={exportAscii} onChange={e => setExportAscii(e.target.checked)} /> ASCII
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                  <input type="checkbox" checked={exportHex} onChange={e => setExportHex(e.target.checked)} /> HEX
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                  <input type="checkbox" checked={exportBin} onChange={e => setExportBin(e.target.checked)} /> BIN
+                </label>
+                <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer py-0.5 hover:bg-zinc-700 rounded px-1">
+                  <input type="checkbox" checked={exportDec} onChange={e => setExportDec(e.target.checked)} /> DEC
+                </label>
+                <button onClick={() => { handleTerminalExport(logs, isPro, FREE_LIMITS.MAX_EXPORT_LINES, { exportAscii, exportHex, exportBin, exportDec }); setShowExportOptions(false); }} className="w-full mt-2 py-1 bg-green-600 hover:bg-green-500 text-white rounded text-xs font-medium">Download</button>
+              </div>
+            )}
+          </div>
+
+          {/* Separator */}
+          <div className="w-px h-5 bg-border mx-0.5" />
+
+          {/* Session Recording Controls */}
+          <div className="flex bg-zinc-800/30 rounded p-0.5 ml-0.5 gap-1 items-center">
+            <button
+              className={`text-white rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors ${connected ? (isRecording ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-rose-600 hover:bg-rose-700 shadow-sm') : 'bg-zinc-800/80 text-zinc-500 cursor-not-allowed opacity-60 font-medium'}`}
+              onClick={connected ? handleToggleRecord : undefined}
+              disabled={!connected}
+              title={connected ? (isRecording ? "Stop Recording Session" : "Record Session to .plog file") : "Connect to a port to enable Session Recording"}
               style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.01em' }}
             >
               {isRecording ? (
                 <><div className="w-1.5 h-1.5 bg-rose-500 rounded-[1px]" /> Stop</>
               ) : (
-                <><div className="w-1.5 h-1.5 bg-rose-200 rounded-full animate-pulse shadow-[0_0_8px_rgba(251,113,133,0.8)]" /> Record</>
+                <><div className={`w-1.5 h-1.5 ${connected ? 'bg-rose-200 shadow-[0_0_8px_rgba(251,113,133,0.8)] animate-pulse' : 'bg-zinc-600'} rounded-full`} /> Record</>
               )}
             </button>
-          )}
 
-          {!connected && !isRecording && (
-            <button
-              className="text-white bg-indigo-600 hover:bg-indigo-700 rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors"
-              onClick={handlePlayRecording}
-              title="Open and Play a .plog session"
-              style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.01em' }}
-            >
-              ▶️ Playback
-            </button>
-          )}
+            {!isRecording && (
+              <button
+                className="text-white bg-indigo-600 shadow-sm hover:bg-indigo-700 rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors"
+                onClick={handlePlayRecording}
+                title="Open and Play a .plog session"
+                style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.01em' }}
+              >
+                ▶️ Playback
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Connection Settings */}
@@ -897,6 +1007,32 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
               onClearData={() => setChartData([])}
             />
 
+            {isPlayingBack && (
+              <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 bg-zinc-900 border border-indigo-500/50 shadow-[0_0_15px_rgba(99,102,241,0.2)] rounded-full px-5 py-2 flex items-center gap-3">
+                {/* Status indicator */}
+                <div className={`w-2.5 h-2.5 rounded-full ${isPlaybackPaused ? 'bg-amber-400' : 'bg-indigo-500 animate-pulse'}`} />
+                <span className="text-sm font-semibold text-indigo-100">
+                  {isPlaybackPaused ? 'Paused' : 'Playing Session...'}
+                </span>
+                <div className="w-px h-4 bg-zinc-700" />
+                {/* Pause / Resume */}
+                <button
+                  onClick={handlePausePlayback}
+                  className="text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1 rounded-full border border-zinc-700 transition-colors flex items-center gap-1"
+                  title={isPlaybackPaused ? 'Resume' : 'Pause'}
+                >
+                  {isPlaybackPaused ? '▶ Resume' : '⏸ Pause'}
+                </button>
+                {/* Stop */}
+                <button
+                  onClick={handleStopPlayback}
+                  className="text-xs bg-zinc-800 hover:bg-red-900/60 text-zinc-300 hover:text-red-300 px-3 py-1 rounded-full border border-zinc-700 hover:border-red-700 transition-colors flex items-center gap-1"
+                  title="Stop Playback"
+                >
+                  ⏹ Stop
+                </button>
+              </div>
+            )}
             <Terminal
               logs={logs}
               onClear={() => setLogs([])}
@@ -904,9 +1040,6 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
                 try {
                   const bytes = Array.from(new TextEncoder().encode(cmd));
                   await invoke("send_ssh_data", { tabId, data: bytes });
-                  // We don't push to incomingQueue directly here, because SSH usually echoes back
-                  // what you type via the read channel itself. If we find it feels disconnected, we
-                  // can add an artificial local echo later.
                 } catch (e) {
                   console.error("Failed to send SSH command:", e);
                 }

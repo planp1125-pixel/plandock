@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
@@ -13,6 +13,8 @@ pub struct TabState {
     pub is_reading: Arc<Mutex<bool>>,
     pub log_file: Arc<Mutex<Option<BufWriter<File>>>>,
     pub reactions: Arc<Mutex<Vec<ActiveReaction>>>,
+    pub log_format: Arc<Mutex<crate::log_utils::LogFormat>>,
+    pub periodic_senders: Arc<Mutex<HashMap<String, mpsc::SyncSender<()>>>>,
 }
 
 impl TabState {
@@ -22,6 +24,8 @@ impl TabState {
             is_reading: Arc::new(Mutex::new(false)),
             log_file: Arc::new(Mutex::new(None)),
             reactions: Arc::new(Mutex::new(Vec::new())),
+            log_format: Arc::new(Mutex::new(crate::log_utils::LogFormat::Jsonl)),
+            periodic_senders: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -120,6 +124,72 @@ impl TcpManager {
         }
     }
 
+    pub fn start_periodic(
+        &self,
+        tab_id: &str,
+        seq_id: String,
+        data: Vec<u8>,
+        interval_ms: u64,
+        app: AppHandle,
+    ) {
+        let tab = self.get_or_create_tab(tab_id);
+
+        // Stop any existing thread for this seq first
+        tab.periodic_senders.lock().unwrap().remove(&seq_id);
+
+        let (tx, rx) = mpsc::sync_channel::<()>(0);
+        tab.periodic_senders
+            .lock()
+            .unwrap()
+            .insert(seq_id.clone(), tx);
+
+        let stream_clone = tab.stream.clone();
+        let log_file = tab.log_file.clone();
+        let log_format = tab.log_format.clone();
+        let tab_id_str = tab_id.to_string();
+
+        thread::spawn(move || loop {
+            match rx.recv_timeout(Duration::from_millis(interval_ms)) {
+                Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+
+                    let s = stream_clone.lock().unwrap();
+                    if let Some(stream_arc) = s.as_ref() {
+                        let mut s_ref = &**stream_arc;
+                        let _ = s_ref.write_all(&data);
+                        let _ = s_ref.flush();
+                        let _ = app.emit(
+                            "serial-data",
+                            (tab_id_str.clone(), data.clone(), ts, "TX_PERIODIC"),
+                        );
+                        crate::log_utils::write_log_entry(
+                            &log_file,
+                            &log_format,
+                            &data,
+                            "TX_PERIODIC",
+                        );
+                    } else {
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    pub fn stop_periodic(&self, tab_id: &str, seq_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        tab.periodic_senders.lock().unwrap().remove(seq_id);
+    }
+
+    pub fn stop_all_periodic(&self, tab_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        tab.periodic_senders.lock().unwrap().clear();
+    }
+
     pub fn write_data(&self, tab_id: &str, data: Vec<u8>) -> Result<(), String> {
         let tab = self.get_or_create_tab(tab_id);
         let s = tab.stream.lock().unwrap();
@@ -128,7 +198,7 @@ impl TcpManager {
             match s_ref.write_all(&data) {
                 Ok(_) => {
                     let _ = s_ref.flush();
-                    Self::write_log_entry(&tab.log_file, &data, "TX");
+                    crate::log_utils::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
                     Ok(())
                 }
                 Err(e) => Err(format!("TCP write failed: {}", e)),
@@ -149,6 +219,7 @@ impl TcpManager {
         let reactions = tab.reactions.clone();
         let stream_clone = tab.stream.clone();
         let log_file = tab.log_file.clone();
+        let log_format = tab.log_format.clone();
 
         {
             let mut r = is_reading.lock().unwrap();
@@ -181,7 +252,7 @@ impl TcpManager {
                             .as_millis();
 
                         let _ = app.emit("serial-data", (tab_id.clone(), data.clone(), ts, "RX"));
-                        Self::write_log_entry(&log_file, &data, "RX");
+                        crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
 
                         rolling_buffer.extend_from_slice(&data);
                         if rolling_buffer.len() > 8192 {
@@ -212,8 +283,9 @@ impl TcpManager {
                                                     "TX_AUTO",
                                                 ),
                                             );
-                                            Self::write_log_entry(
+                                            crate::log_utils::write_log_entry(
                                                 &log_file,
+                                                &log_format,
                                                 &r.response_data,
                                                 "TX_AUTO",
                                             );
@@ -251,12 +323,21 @@ impl TcpManager {
         });
     }
 
-    pub fn start_logging(&self, tab_id: &str, path: String) -> Result<(), String> {
+    pub fn start_logging(
+        &self,
+        tab_id: &str,
+        path: String,
+        format: crate::log_utils::LogFormat,
+    ) -> Result<(), String> {
         let tab = self.get_or_create_tab(tab_id);
         let file = std::fs::File::create(&path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
         let mut lfile = tab.log_file.lock().unwrap();
         *lfile = Some(std::io::BufWriter::new(file));
+
+        let mut f_lock = tab.log_format.lock().unwrap();
+        *f_lock = format;
+
         Ok(())
     }
 
@@ -270,29 +351,5 @@ impl TcpManager {
         let tab = self.get_or_create_tab(tab_id);
         let logging = tab.log_file.lock().unwrap().is_some();
         logging
-    }
-
-    fn write_log_entry(
-        log_file: &Arc<Mutex<Option<std::io::BufWriter<std::fs::File>>>>,
-        data: &[u8],
-        direction: &str,
-    ) {
-        use std::io::Write;
-        let mut lfile = match log_file.lock() {
-            Ok(l) => l,
-            Err(_) => return,
-        };
-        if let Some(ref mut writer) = *lfile {
-            let ts_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let line = format!(
-                "{{\"ts\":{},\"dir\":\"{}\",\"data\":{:?}}}\n",
-                ts_ms, direction, data
-            );
-            let _ = writer.write_all(line.as_bytes());
-            let _ = writer.flush();
-        }
     }
 }

@@ -3,7 +3,7 @@ use ssh2::Session;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
@@ -13,6 +13,8 @@ pub struct TabState {
     pub tx: Arc<Mutex<Option<std::sync::mpsc::Sender<Vec<u8>>>>>,
     pub reactions: Arc<Mutex<Vec<ActiveReaction>>>,
     pub log_file: Arc<Mutex<Option<std::io::BufWriter<std::fs::File>>>>,
+    pub log_format: Arc<Mutex<crate::log_utils::LogFormat>>,
+    pub periodic_senders: Arc<Mutex<HashMap<String, mpsc::SyncSender<()>>>>,
 }
 
 impl TabState {
@@ -22,6 +24,8 @@ impl TabState {
             tx: Arc::new(Mutex::new(None)),
             reactions: Arc::new(Mutex::new(Vec::new())),
             log_file: Arc::new(Mutex::new(None)),
+            log_format: Arc::new(Mutex::new(crate::log_utils::LogFormat::Jsonl)),
+            periodic_senders: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -89,6 +93,7 @@ impl SshManager {
         let app_clone = app.clone();
         let reactions_clone = tab.reactions.clone();
         let log_file = tab.log_file.clone();
+        let log_format = tab.log_format.clone();
         let tx_clone = tx.clone();
         let tab_id_str = tab_id.to_string();
 
@@ -147,7 +152,7 @@ impl SshManager {
                         let _ = app_clone
                             .emit("serial-data", (tab_id_str.clone(), data.clone(), ts, "RX"));
 
-                        Self::write_log_entry(&log_file, &data, "RX");
+                        crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
 
                         rolling_buffer.extend_from_slice(&data);
                         if rolling_buffer.len() > 8192 {
@@ -178,8 +183,9 @@ impl SshManager {
                                                     "TX_AUTO",
                                                 ),
                                             );
-                                            Self::write_log_entry(
+                                            crate::log_utils::write_log_entry(
                                                 &log_file,
+                                                &log_format,
                                                 &r.response_data,
                                                 "TX_AUTO",
                                             );
@@ -238,11 +244,78 @@ impl SshManager {
         let tx_lock = tab.tx.lock().unwrap();
         if let Some(sender) = tx_lock.as_ref() {
             sender.send(data.clone()).map_err(|e| e.to_string())?;
-            Self::write_log_entry(&tab.log_file, &data, "TX");
+            crate::log_utils::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
             Ok(())
         } else {
             Err("SSH connection not active".to_string())
         }
+    }
+
+    pub fn start_periodic(
+        &self,
+        tab_id: &str,
+        seq_id: String,
+        data: Vec<u8>,
+        interval_ms: u64,
+        app: AppHandle,
+    ) {
+        let tab = self.get_or_create_tab(tab_id);
+
+        tab.periodic_senders.lock().unwrap().remove(&seq_id);
+
+        let (tx, rx) = mpsc::sync_channel::<()>(0);
+        tab.periodic_senders
+            .lock()
+            .unwrap()
+            .insert(seq_id.clone(), tx);
+
+        let ssh_tx = tab.tx.clone();
+        let log_file = tab.log_file.clone();
+        let log_format = tab.log_format.clone();
+        let tab_id_str = tab_id.to_string();
+
+        thread::spawn(move || {
+            loop {
+                match rx.recv_timeout(Duration::from_millis(interval_ms)) {
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let ts = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis();
+
+                        let lock = ssh_tx.lock().unwrap();
+                        if let Some(sender) = lock.as_ref() {
+                            if sender.send(data.clone()).is_err() {
+                                break; // channel closed — SSH disconnected
+                            }
+                            let _ = app.emit(
+                                "serial-data",
+                                (tab_id_str.clone(), data.clone(), ts, "TX_PERIODIC"),
+                            );
+                            crate::log_utils::write_log_entry(
+                                &log_file,
+                                &log_format,
+                                &data,
+                                "TX_PERIODIC",
+                            );
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    pub fn stop_periodic(&self, tab_id: &str, seq_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        tab.periodic_senders.lock().unwrap().remove(seq_id);
+    }
+
+    pub fn stop_all_periodic(&self, tab_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        tab.periodic_senders.lock().unwrap().clear();
     }
 
     pub fn set_reactions(&self, tab_id: &str, new_reactions: Vec<ActiveReaction>) {
@@ -277,12 +350,21 @@ impl SshManager {
         }
     }
 
-    pub fn start_logging(&self, tab_id: &str, path: String) -> Result<(), String> {
+    pub fn start_logging(
+        &self,
+        tab_id: &str,
+        path: String,
+        format: crate::log_utils::LogFormat,
+    ) -> Result<(), String> {
         let tab = self.get_or_create_tab(tab_id);
         let file = std::fs::File::create(&path)
             .map_err(|e| format!("Failed to create log file: {}", e))?;
         let mut lfile = tab.log_file.lock().unwrap();
         *lfile = Some(std::io::BufWriter::new(file));
+
+        let mut f_lock = tab.log_format.lock().unwrap();
+        *f_lock = format;
+
         Ok(())
     }
 
@@ -296,29 +378,5 @@ impl SshManager {
         let tab = self.get_or_create_tab(tab_id);
         let logging = tab.log_file.lock().unwrap().is_some();
         logging
-    }
-
-    fn write_log_entry(
-        log_file: &Arc<Mutex<Option<std::io::BufWriter<std::fs::File>>>>,
-        data: &[u8],
-        direction: &str,
-    ) {
-        use std::io::Write;
-        let mut lfile = match log_file.lock() {
-            Ok(l) => l,
-            Err(_) => return,
-        };
-        if let Some(ref mut writer) = *lfile {
-            let ts_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let line = format!(
-                "{{\"ts\":{},\"dir\":\"{}\",\"data\":{:?}}}\n",
-                ts_ms, direction, data
-            );
-            let _ = writer.write_all(line.as_bytes());
-            let _ = writer.flush();
-        }
     }
 }

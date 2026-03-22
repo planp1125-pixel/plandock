@@ -4,18 +4,11 @@ use serialport::{DataBits, FlowControl, Parity, SerialPort, SerialPortType, Stop
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Write};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum LogFormat {
-    Hex,
-    Ascii,
-    Both,
-    Jsonl,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PortInfo {
@@ -40,7 +33,9 @@ pub struct TabState {
     pub reactions: Arc<Mutex<Vec<ActiveReaction>>>,
     pub packet_timeout: Arc<Mutex<u64>>,
     pub log_file: Arc<Mutex<Option<BufWriter<File>>>>,
-    pub log_format: Arc<Mutex<LogFormat>>,
+    pub log_format: Arc<Mutex<crate::log_utils::LogFormat>>,
+    /// seq_id -> stop-sender. Dropping the sender signals the thread to exit.
+    pub periodic_senders: Arc<Mutex<HashMap<String, mpsc::SyncSender<()>>>>,
 }
 
 impl TabState {
@@ -52,7 +47,8 @@ impl TabState {
             reactions: Arc::new(Mutex::new(Vec::new())),
             packet_timeout: Arc::new(Mutex::new(100)),
             log_file: Arc::new(Mutex::new(None)),
-            log_format: Arc::new(Mutex::new(LogFormat::Jsonl)),
+            log_format: Arc::new(Mutex::new(crate::log_utils::LogFormat::Jsonl)),
+            periodic_senders: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -88,7 +84,12 @@ impl SerialManager {
         *r_lock = new_reactions;
     }
 
-    pub fn start_logging(&self, tab_id: &str, path: String) -> Result<(), String> {
+    pub fn start_logging(
+        &self,
+        tab_id: &str,
+        path: String,
+        format: crate::log_utils::LogFormat,
+    ) -> Result<(), String> {
         let tab = self.get_or_create_tab(tab_id);
 
         eprintln!("[LOG] [{}] Starting Session Recording to: {}", tab_id, path);
@@ -103,6 +104,9 @@ impl SerialManager {
 
         let mut lfile = tab.log_file.lock().unwrap();
         *lfile = Some(writer);
+
+        let mut f_lock = tab.log_format.lock().unwrap();
+        *f_lock = format;
 
         Ok(())
     }
@@ -122,72 +126,76 @@ impl SerialManager {
         logging
     }
 
-    fn write_log_entry(
-        log_file: &Arc<Mutex<Option<BufWriter<File>>>>,
-        log_format: &Arc<Mutex<LogFormat>>,
-        data: &[u8],
-        direction: &str,
+    /// Starts a native OS thread that fires `data` every `interval_ms` milliseconds.
+    /// The thread exits cleanly when the stop channel is dropped (i.e. stop_periodic is called).
+    pub fn start_periodic(
+        &self,
+        tab_id: &str,
+        seq_id: String,
+        data: Vec<u8>,
+        interval_ms: u64,
+        app: AppHandle,
     ) {
-        let mut lfile = match log_file.lock() {
-            Ok(l) => l,
-            Err(_) => return,
-        };
-        if let Some(ref mut writer) = *lfile {
-            let format = *log_format.lock().unwrap();
-            let ts_ms = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis();
-            let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.6f");
+        let tab = self.get_or_create_tab(tab_id);
 
-            let line = if matches!(format, LogFormat::Jsonl) {
-                format!(
-                    "{{\"ts\":{},\"dir\":\"{}\",\"data\":{:?}}}\n",
-                    ts_ms, direction, data
-                )
-            } else {
-                let formatted_data = match format {
-                    LogFormat::Hex => data
-                        .iter()
-                        .map(|b| format!("{:02X}", b))
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    LogFormat::Ascii => data
-                        .iter()
-                        .map(|b| {
-                            if *b >= 32 && *b < 127 {
-                                (*b as char).to_string()
-                            } else {
-                                format!("<{:02X}>", b)
-                            }
-                        })
-                        .collect(),
-                    LogFormat::Both => {
-                        let hex = data
-                            .iter()
-                            .map(|b| format!("{:02X}", b))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let ascii: String = data
-                            .iter()
-                            .map(|b| {
-                                if *b >= 32 && *b < 127 {
-                                    *b as char
-                                } else {
-                                    '.'
-                                }
-                            })
-                            .collect();
-                        format!("{} | {}", hex, ascii)
+        // Stop any existing thread for this seq first
+        tab.periodic_senders.lock().unwrap().remove(&seq_id);
+
+        let (tx, rx) = mpsc::sync_channel::<()>(0);
+        tab.periodic_senders
+            .lock()
+            .unwrap()
+            .insert(seq_id.clone(), tx);
+
+        let write_port = tab.write_port.clone();
+        let log_file = tab.log_file.clone();
+        let log_format = tab.log_format.clone();
+        let tab_id_str = tab_id.to_string();
+
+        thread::spawn(move || {
+            loop {
+                // Wait for interval or stop signal
+                match rx.recv_timeout(Duration::from_millis(interval_ms)) {
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        // Time to fire
+                        let ts = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis();
+
+                        let mut wp = write_port.lock().unwrap();
+                        if let Some(port) = wp.as_mut() {
+                            let _ = port.write_all(&data);
+                            let _ = port.flush();
+                            let _ = app.emit(
+                                "serial-data",
+                                (tab_id_str.clone(), data.clone(), ts, "TX_PERIODIC"),
+                            );
+                            crate::log_utils::write_log_entry(
+                                &log_file,
+                                &log_format,
+                                &data,
+                                "TX_PERIODIC",
+                            );
+                        } else {
+                            // Port gone — stop thread
+                            break;
+                        }
                     }
-                    LogFormat::Jsonl => String::new(),
-                };
-                format!("[{}] {} {}\n", timestamp, direction, formatted_data)
-            };
+                }
+            }
+        });
+    }
 
-            let _ = writer.write_all(line.as_bytes());
-            let _ = writer.flush();
-        }
+    pub fn stop_periodic(&self, tab_id: &str, seq_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        tab.periodic_senders.lock().unwrap().remove(seq_id);
+    }
+
+    pub fn stop_all_periodic(&self, tab_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        tab.periodic_senders.lock().unwrap().clear();
     }
 
     pub fn list_ports() -> Vec<PortInfo> {
@@ -334,7 +342,7 @@ impl SerialManager {
                             let _ =
                                 app.emit("serial-data", (tab_id.clone(), data.clone(), ts, "RX"));
 
-                            Self::write_log_entry(&log_file, &log_format, &data, "RX");
+                            crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
 
                             rolling_buffer.extend_from_slice(&data);
                             if rolling_buffer.len() > 8192 {
@@ -372,7 +380,7 @@ impl SerialManager {
                                                     let _ = port.flush();
                                                 }
 
-                                                Self::write_log_entry(
+                                                crate::log_utils::write_log_entry(
                                                     &log_file,
                                                     &log_format,
                                                     &r.response_data,
@@ -411,7 +419,7 @@ impl SerialManager {
             match port.write_all(&data) {
                 Ok(_) => {
                     let _ = port.flush();
-                    Self::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
+                    crate::log_utils::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),
