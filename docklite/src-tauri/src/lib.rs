@@ -10,7 +10,7 @@ use tcp_manager::TcpManager;
 use ssh_manager::SshManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{Manager, State, AppHandle};
+use tauri::{Manager, State, AppHandle, Emitter};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ActiveReaction {
@@ -114,20 +114,53 @@ fn deactivate_license(state: State<'_, LicenseManager>) -> Result<(), String> {
     state.deactivate()
 }
 
-// Logging commands
 #[tauri::command]
-fn start_logging(state: State<'_, Arc<SerialManager>>, tab_id: String, path: String, format: String) -> Result<(), String> {
-    state.start_logging(&tab_id, &path, &format)
+fn start_logging(
+    serial_manager: State<'_, Arc<SerialManager>>, 
+    tcp_manager: State<'_, Arc<TcpManager>>, 
+    ssh_manager: State<'_, Arc<SshManager>>, 
+    tab_id: String, 
+    path: String,
+    conn_type: String
+) -> Result<(), String> {
+    match conn_type.as_str() {
+        "Serial" | "serial" => serial_manager.start_logging(&tab_id, path),
+        "TCP" | "tcp" => tcp_manager.start_logging(&tab_id, path),
+        "SSH" | "ssh" => ssh_manager.start_logging(&tab_id, path),
+        _ => Err("Unknown connection type for logging".to_string())
+    }
 }
 
 #[tauri::command]
-fn stop_logging(state: State<'_, Arc<SerialManager>>, tab_id: String) {
-    state.stop_logging(&tab_id);
+fn stop_logging(
+    serial_manager: State<'_, Arc<SerialManager>>, 
+    tcp_manager: State<'_, Arc<TcpManager>>, 
+    ssh_manager: State<'_, Arc<SshManager>>, 
+    tab_id: String,
+    conn_type: String
+) {
+    match conn_type.as_str() {
+        "Serial" | "serial" => serial_manager.stop_logging(&tab_id),
+        "TCP" | "tcp" => tcp_manager.stop_logging(&tab_id),
+        "SSH" | "ssh" => ssh_manager.stop_logging(&tab_id),
+        _ => {}
+    }
 }
 
 #[tauri::command]
-fn is_logging(state: State<'_, Arc<SerialManager>>, tab_id: String) -> bool {
-    state.is_logging(&tab_id)
+fn is_logging(
+    serial_manager: State<'_, Arc<SerialManager>>, 
+    tcp_manager: State<'_, Arc<TcpManager>>, 
+    ssh_manager: State<'_, Arc<SshManager>>, 
+    tab_id: String,
+    conn_type: String
+) -> bool {
+    match conn_type.as_str() {
+        "Serial" | "serial" => serial_manager.is_logging(&tab_id),
+        "TCP" | "tcp" => tcp_manager.is_logging(&tab_id),
+        "SSH" | "ssh" => ssh_manager.is_logging(&tab_id),
+        _ => false
+    }
 }
 
 #[tauri::command]
@@ -218,6 +251,63 @@ fn is_ssh_connected(ssh_manager: State<'_, Arc<SshManager>>, tab_id: String) -> 
     ssh_manager.is_connected(&tab_id)
 }
 
+#[tauri::command]
+fn play_recording(app: AppHandle, tab_id: String, path: String, speed_multiplier: f64) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let file = match std::fs::File::open(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("Failed to open recording: {}", e);
+                return;
+            }
+        };
+        let reader = std::io::BufReader::new(file);
+        
+        let _ = app.emit("playback-started", tab_id.clone());
+        
+        use std::io::BufRead;
+        let mut last_ts = 0;
+        
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let v: serde_json::Value = match serde_json::from_str(&l) {
+                    Ok(val) => val,
+                    Err(_) => continue,
+                };
+                
+                let ts = v["ts"].as_u64().unwrap_or(0);
+                let dir = v["dir"].as_str().unwrap_or("RX");
+                
+                let data_array = match v["data"].as_array() {
+                    Some(arr) => arr,
+                    None => continue,
+                };
+                
+                let mut bytes = Vec::new();
+                for b in data_array {
+                    if let Some(num) = b.as_u64() {
+                        bytes.push(num as u8);
+                    }
+                }
+                
+                if last_ts > 0 && ts > last_ts && speed_multiplier > 0.0 {
+                    let diff = ts - last_ts;
+                    let sleep_ms = (diff as f64 / speed_multiplier) as u64;
+                    if sleep_ms > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                    }
+                }
+                last_ts = ts;
+                
+                let _ = app.emit("serial-data", (tab_id.clone(), bytes, ts as u128, dir));
+            }
+        }
+        
+        let _ = app.emit("playback-ended", tab_id.clone());
+    });
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -259,7 +349,8 @@ pub fn run() {
             connect_ssh,
             disconnect_ssh,
             send_ssh_data,
-            is_ssh_connected
+            is_ssh_connected,
+            play_recording
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

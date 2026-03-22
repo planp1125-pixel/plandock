@@ -128,6 +128,7 @@ impl TcpManager {
             match s_ref.write_all(&data) {
                 Ok(_) => {
                     let _ = s_ref.flush();
+                    Self::write_log_entry(&tab.log_file, &data, "TX");
                     Ok(())
                 }
                 Err(e) => Err(format!("TCP write failed: {}", e)),
@@ -147,6 +148,7 @@ impl TcpManager {
         let is_reading = tab.is_reading.clone();
         let reactions = tab.reactions.clone();
         let stream_clone = tab.stream.clone();
+        let log_file = tab.log_file.clone();
 
         {
             let mut r = is_reading.lock().unwrap();
@@ -179,6 +181,7 @@ impl TcpManager {
                             .as_millis();
 
                         let _ = app.emit("serial-data", (tab_id.clone(), data.clone(), ts, "RX"));
+                        Self::write_log_entry(&log_file, &data, "RX");
 
                         rolling_buffer.extend_from_slice(&data);
                         if rolling_buffer.len() > 8192 {
@@ -208,6 +211,11 @@ impl TcpManager {
                                                     start_ts,
                                                     "TX_AUTO",
                                                 ),
+                                            );
+                                            Self::write_log_entry(
+                                                &log_file,
+                                                &r.response_data,
+                                                "TX_AUTO",
                                             );
 
                                             if let Some(w_stream_arc) =
@@ -241,5 +249,50 @@ impl TcpManager {
             let mut r = is_reading.lock().unwrap();
             *r = false;
         });
+    }
+
+    pub fn start_logging(&self, tab_id: &str, path: String) -> Result<(), String> {
+        let tab = self.get_or_create_tab(tab_id);
+        let file = std::fs::File::create(&path)
+            .map_err(|e| format!("Failed to create log file: {}", e))?;
+        let mut lfile = tab.log_file.lock().unwrap();
+        *lfile = Some(std::io::BufWriter::new(file));
+        Ok(())
+    }
+
+    pub fn stop_logging(&self, tab_id: &str) {
+        let tab = self.get_or_create_tab(tab_id);
+        let mut lfile = tab.log_file.lock().unwrap();
+        *lfile = None;
+    }
+
+    pub fn is_logging(&self, tab_id: &str) -> bool {
+        let tab = self.get_or_create_tab(tab_id);
+        let logging = tab.log_file.lock().unwrap().is_some();
+        logging
+    }
+
+    fn write_log_entry(
+        log_file: &Arc<Mutex<Option<std::io::BufWriter<std::fs::File>>>>,
+        data: &[u8],
+        direction: &str,
+    ) {
+        use std::io::Write;
+        let mut lfile = match log_file.lock() {
+            Ok(l) => l,
+            Err(_) => return,
+        };
+        if let Some(ref mut writer) = *lfile {
+            let ts_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let line = format!(
+                "{{\"ts\":{},\"dir\":\"{}\",\"data\":{:?}}}\n",
+                ts_ms, direction, data
+            );
+            let _ = writer.write_all(line.as_bytes());
+            let _ = writer.flush();
+        }
     }
 }

@@ -14,6 +14,7 @@ pub enum LogFormat {
     Hex,
     Ascii,
     Both,
+    Jsonl,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -51,7 +52,7 @@ impl TabState {
             reactions: Arc::new(Mutex::new(Vec::new())),
             packet_timeout: Arc::new(Mutex::new(100)),
             log_file: Arc::new(Mutex::new(None)),
-            log_format: Arc::new(Mutex::new(LogFormat::Both)),
+            log_format: Arc::new(Mutex::new(LogFormat::Jsonl)),
         }
     }
 }
@@ -87,18 +88,10 @@ impl SerialManager {
         *r_lock = new_reactions;
     }
 
-    pub fn start_logging(&self, tab_id: &str, path: &str, format: &str) -> Result<(), String> {
+    pub fn start_logging(&self, tab_id: &str, path: String) -> Result<(), String> {
         let tab = self.get_or_create_tab(tab_id);
-        let log_format = match format {
-            "hex" => LogFormat::Hex,
-            "ascii" => LogFormat::Ascii,
-            _ => LogFormat::Both,
-        };
 
-        eprintln!(
-            "[LOG] [{}] Starting logging to: {} with format: {:?}",
-            tab_id, path, log_format
-        );
+        eprintln!("[LOG] [{}] Starting Session Recording to: {}", tab_id, path);
 
         let file = OpenOptions::new()
             .create(true)
@@ -106,32 +99,10 @@ impl SerialManager {
             .open(path)
             .map_err(|e| e.to_string())?;
 
-        let mut writer = BufWriter::new(file);
-        let header = format!(
-            "=== Plan Terminal Log Started ({}) ===\n",
-            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-        );
-        writer
-            .write_all(header.as_bytes())
-            .map_err(|e| e.to_string())?;
-        writer.flush().map_err(|e| e.to_string())?;
-
-        let mut lf = tab.log_format.lock().unwrap();
-        *lf = log_format;
-        drop(lf);
+        let writer = BufWriter::new(file);
 
         let mut lfile = tab.log_file.lock().unwrap();
         *lfile = Some(writer);
-
-        if let Some(ref mut w) = *lfile {
-            let test_line = format!(
-                "[{}] --- Logging active, format: {:?}, waiting for data... ---\n",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
-                log_format
-            );
-            let _ = w.write_all(test_line.as_bytes());
-            let _ = w.flush();
-        }
 
         Ok(())
     }
@@ -140,11 +111,6 @@ impl SerialManager {
         let tab = self.get_or_create_tab(tab_id);
         let mut lfile = tab.log_file.lock().unwrap();
         if let Some(ref mut writer) = *lfile {
-            let footer = format!(
-                "=== Plan Terminal Log Ended: {} ===\n",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
-            );
-            let _ = writer.write_all(footer.as_bytes());
             let _ = writer.flush();
         }
         *lfile = None;
@@ -168,45 +134,57 @@ impl SerialManager {
         };
         if let Some(ref mut writer) = *lfile {
             let format = *log_format.lock().unwrap();
+            let ts_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
             let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.6f");
 
-            let formatted_data = match format {
-                LogFormat::Hex => data
-                    .iter()
-                    .map(|b| format!("{:02X}", b))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                LogFormat::Ascii => data
-                    .iter()
-                    .map(|b| {
-                        if *b >= 32 && *b < 127 {
-                            (*b as char).to_string()
-                        } else {
-                            format!("<{:02X}>", b)
-                        }
-                    })
-                    .collect(),
-                LogFormat::Both => {
-                    let hex = data
+            let line = if matches!(format, LogFormat::Jsonl) {
+                format!(
+                    "{{\"ts\":{},\"dir\":\"{}\",\"data\":{:?}}}\n",
+                    ts_ms, direction, data
+                )
+            } else {
+                let formatted_data = match format {
+                    LogFormat::Hex => data
                         .iter()
                         .map(|b| format!("{:02X}", b))
                         .collect::<Vec<_>>()
-                        .join(" ");
-                    let ascii: String = data
+                        .join(" "),
+                    LogFormat::Ascii => data
                         .iter()
                         .map(|b| {
                             if *b >= 32 && *b < 127 {
-                                *b as char
+                                (*b as char).to_string()
                             } else {
-                                '.'
+                                format!("<{:02X}>", b)
                             }
                         })
-                        .collect();
-                    format!("{} | {}", hex, ascii)
-                }
+                        .collect(),
+                    LogFormat::Both => {
+                        let hex = data
+                            .iter()
+                            .map(|b| format!("{:02X}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let ascii: String = data
+                            .iter()
+                            .map(|b| {
+                                if *b >= 32 && *b < 127 {
+                                    *b as char
+                                } else {
+                                    '.'
+                                }
+                            })
+                            .collect();
+                        format!("{} | {}", hex, ascii)
+                    }
+                    LogFormat::Jsonl => String::new(),
+                };
+                format!("[{}] {} {}\n", timestamp, direction, formatted_data)
             };
 
-            let line = format!("[{}] {} {}\n", timestamp, direction, formatted_data);
             let _ = writer.write_all(line.as_bytes());
             let _ = writer.flush();
         }

@@ -1,15 +1,14 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { Terminal, LogEntry } from "./Terminal";
 import { SequenceEditor } from "./SequenceEditor";
 import { ReactionEditor } from "./ReactionEditor";
-import { LicenseDialog } from "./LicenseDialog";
 import { Project, Sequence, Reaction, PortInfo } from "../types";
 import { parseData } from "../utils";
-import { RotateCw, Settings, Moon, Sun, ChevronDown, Crown, LineChart as LineChartIcon } from "lucide-react";
+import { RotateCw, Settings, ChevronDown, LineChart as LineChartIcon } from "lucide-react";
 import { ChartWindow } from "./ChartWindow";
 import { ChartConfig, ChartDataPoint, extractValue } from "../chart_utils";
 
@@ -29,6 +28,7 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
   const [editingSeq, setEditingSeq] = useState<Sequence | null>(null);
   const [editingReaction, setEditingReaction] = useState<Reaction | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [isRecording, setIsRecording] = useState(false);
 
   // Chart State
   const [isChartOpen, setIsChartOpen] = useState(false);
@@ -55,10 +55,10 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
   const [stopBits, setStopBits] = useState(1);
   const [flowControl, setFlowControl] = useState("None");
   const [showSettings, setShowSettings] = useState(false);
-  
+
 
   // Dark mode
-  
+
 
   const refreshPorts = async () => {
     try {
@@ -69,6 +69,42 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
       }
     } catch (e) {
       console.error("Failed to list ports", e);
+    }
+  };
+
+  const handleToggleRecord = async () => {
+    if (isRecording) {
+      await invoke("stop_logging", { tabId, connType: connectionType });
+      setIsRecording(false);
+    } else {
+      const selectedPath = await save({
+        filters: [{ name: 'Plan Terminal Session', extensions: ['plog'] }],
+        title: 'Save Session Recording (.plog)'
+      });
+      if (selectedPath) {
+        try {
+          await invoke("start_logging", { tabId, path: selectedPath, connType: connectionType });
+          setIsRecording(true);
+        } catch (e) {
+          alert("Failed to start recording: " + String(e));
+        }
+      }
+    }
+  };
+
+  const handlePlayRecording = async () => {
+    const selectedPath = await open({
+      filters: [{ name: 'Plan Terminal Session', extensions: ['plog'] }],
+      title: 'Open Session Recording (.plog)',
+      multiple: false
+    });
+
+    if (selectedPath && typeof selectedPath === 'string') {
+      try {
+        await invoke("play_recording", { tabId, path: selectedPath, speedMultiplier: 1.0 });
+      } catch (e) {
+        alert("Playback failed: " + String(e));
+      }
     }
   };
 
@@ -172,7 +208,7 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
       return { trigger_data: triggerBytes, response_data: responseBytes };
     });
 
-    invoke("set_reactions", { tabId,  newReactions: mappedReactions }).catch(e =>
+    invoke("set_reactions", { tabId, newReactions: mappedReactions }).catch(e =>
       console.error("Failed to sync reactions to backend:", e)
     );
   }, [project.reactions, project.send_sequences]);
@@ -222,10 +258,19 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
       alert("SSH Connection closed.");
     });
 
+    const unlistenPlaybackStart = listen<string>('playback-started', (event) => {
+      if (event.payload !== tabId) return;
+      setLogs([]); // Wipes terminal log completely to prepare for incoming stream
+      setChartData([]);
+      incomingQueue.current = [];
+      lastRef.current = null;
+    });
+
     return () => {
       unlistenData.then(f => f());
       unlistenTcpDisconnect.then(f => f());
       unlistenSshDisconnect.then(f => f());
+      unlistenPlaybackStart.then(f => f());
     };
   }, []);
 
@@ -261,11 +306,11 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
           const bytes = parseData(seq.data, seq.view_mode);
           try {
             if (connectionType === 'Serial') {
-              await invoke("send_serial_data", { tabId,  data: bytes });
+              await invoke("send_serial_data", { tabId, data: bytes });
             } else if (connectionType === 'TCP') {
-              await invoke("send_tcp_data", { tabId,  data: bytes });
+              await invoke("send_tcp_data", { tabId, data: bytes });
             } else if (connectionType === 'SSH') {
-              await invoke("send_ssh_data", { tabId,  data: bytes });
+              await invoke("send_ssh_data", { tabId, data: bytes });
             }
             incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
           } catch (e) {
@@ -296,11 +341,11 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
 
     try {
       if (connectionType === 'Serial') {
-        await invoke("send_serial_data", { tabId,  data: bytes });
+        await invoke("send_serial_data", { tabId, data: bytes });
       } else if (connectionType === 'TCP') {
-        await invoke("send_tcp_data", { tabId,  data: bytes });
+        await invoke("send_tcp_data", { tabId, data: bytes });
       } else if (connectionType === 'SSH') {
-        await invoke("send_ssh_data", { tabId,  data: bytes });
+        await invoke("send_ssh_data", { tabId, data: bytes });
       }
       incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
     } catch (e) {
@@ -313,7 +358,8 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
     try {
       setIsConnecting(true);
       if (connectionType === 'Serial') {
-        await invoke("open_serial_port", { tabId, 
+        await invoke("open_serial_port", {
+          tabId,
           portName: selectedPort,
           baudRate,
           dataBits,
@@ -322,12 +368,14 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
           stopBits
         });
       } else if (connectionType === 'TCP') {
-        await invoke("connect_tcp", { tabId, 
+        await invoke("connect_tcp", {
+          tabId,
           host: tcpHost,
           port: tcpPort
         });
       } else if (connectionType === 'SSH') {
-        await invoke("connect_ssh", { tabId, 
+        await invoke("connect_ssh", {
+          tabId,
           host: sshHost,
           port: sshPort,
           user: sshUsername,
@@ -368,11 +416,11 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
     <div className="h-full w-full bg-background text-foreground flex flex-col overflow-hidden" style={{ display: isActive ? 'flex' : 'none' }}>
       <header className="px-3 py-2 border-b flex justify-between items-center bg-card shadow-sm shrink-0">
         <div className="flex items-center gap-3">
-          
 
-          
 
-          
+
+
+
 
           {/* Chart Toggle Button */}
           <button
@@ -382,6 +430,36 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
           >
             <LineChartIcon className="w-4 h-4" />
           </button>
+
+          {/* Separator */}
+          <div className="w-px h-5 bg-border mx-0.5" />
+
+          {/* Session Recording Controls */}
+          {connected && (
+            <button
+              className={`text-white rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors ${isRecording ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-rose-600 hover:bg-rose-700'}`}
+              onClick={handleToggleRecord}
+              title={isRecording ? "Stop Recording Session" : "Record Session to .plog file"}
+              style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.01em' }}
+            >
+              {isRecording ? (
+                <><div className="w-1.5 h-1.5 bg-rose-500 rounded-[1px]" /> Stop</>
+              ) : (
+                <><div className="w-1.5 h-1.5 bg-rose-200 rounded-full animate-pulse shadow-[0_0_8px_rgba(251,113,133,0.8)]" /> Record</>
+              )}
+            </button>
+          )}
+
+          {!connected && !isRecording && (
+            <button
+              className="text-white bg-indigo-600 hover:bg-indigo-700 rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors"
+              onClick={handlePlayRecording}
+              title="Open and Play a .plog session"
+              style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.01em' }}
+            >
+              ▶️ Playback
+            </button>
+          )}
         </div>
 
         {/* Connection Settings */}
@@ -825,7 +903,7 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
               onSendCommand={connectionType === 'SSH' ? async (cmd: string) => {
                 try {
                   const bytes = Array.from(new TextEncoder().encode(cmd));
-                  await invoke("send_ssh_data", { tabId,  data: bytes });
+                  await invoke("send_ssh_data", { tabId, data: bytes });
                   // We don't push to incomingQueue directly here, because SSH usually echoes back
                   // what you type via the read channel itself. If we find it feels disconnected, we
                   // can add an artificial local echo later.
@@ -868,7 +946,7 @@ export function Workspace({ tabId, isActive, darkMode, onConnectionStatusChange,
       )}
 
       {/* License Dialog */}
-      
+
     </div>
   );
 }
