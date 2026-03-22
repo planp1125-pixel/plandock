@@ -66,8 +66,9 @@ function App() {
       {/* GLOBAL HEADER */}
       <header className="px-3 py-0 border-b flex justify-between items-center bg-card shadow-sm shrink-0 h-10">
         <div className="flex items-center flex-1 overflow-x-auto h-full pr-4">
-          <div className="flex items-center gap-2 mr-4 shrink-0 pl-1">
+          <div className="flex items-center justify-center gap-1.5 mr-4 shrink-0 pl-1">
             <img src={logo} alt="Plan Terminal" className="w-5 h-5 pointer-events-none" />
+            <span className="text-[10px] text-muted-foreground font-medium select-none">v0.5.0</span>
           </div>
 
           <div className="flex items-end h-full pt-1.5 overflow-x-auto select-none no-scrollbar">
