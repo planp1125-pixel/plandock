@@ -15,6 +15,7 @@ pub struct TabState {
     pub reactions: Arc<Mutex<Vec<ActiveReaction>>>,
     pub log_format: Arc<Mutex<crate::log_utils::LogFormat>>,
     pub periodic_senders: Arc<Mutex<HashMap<String, mpsc::SyncSender<()>>>>,
+    pub rolling_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 impl TabState {
@@ -26,6 +27,7 @@ impl TabState {
             reactions: Arc::new(Mutex::new(Vec::new())),
             log_format: Arc::new(Mutex::new(crate::log_utils::LogFormat::Jsonl)),
             periodic_senders: Arc::new(Mutex::new(HashMap::new())),
+            rolling_buffer: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -94,6 +96,9 @@ impl TcpManager {
         let tab = self.get_or_create_tab(tab_id);
         let mut r_lock = tab.reactions.lock().unwrap();
         *r_lock = new_reactions;
+        // Clear buffer on reaction update
+        let mut b_lock = tab.rolling_buffer.lock().unwrap();
+        b_lock.clear();
     }
 
     pub fn disconnect(&self, tab_id: &str) {
@@ -219,7 +224,9 @@ impl TcpManager {
         let reactions = tab.reactions.clone();
         let stream_clone = tab.stream.clone();
         let log_file = tab.log_file.clone();
+        let log_file = tab.log_file.clone();
         let log_format = tab.log_format.clone();
+        let rolling_buffer = tab.rolling_buffer.clone();
 
         {
             let mut r = is_reading.lock().unwrap();
@@ -231,7 +238,6 @@ impl TcpManager {
 
         thread::spawn(move || {
             let mut buf = vec![0u8; 4096];
-            let mut rolling_buffer: Vec<u8> = Vec::new();
 
             loop {
                 if !*is_reading.lock().unwrap() {
@@ -254,10 +260,11 @@ impl TcpManager {
                         let _ = app.emit("serial-data", (tab_id.clone(), data.clone(), ts, "RX"));
                         crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
 
-                        rolling_buffer.extend_from_slice(&data);
-                        if rolling_buffer.len() > 8192 {
-                            let len = rolling_buffer.len();
-                            rolling_buffer.drain(0..len - 8192);
+                        let mut rb_lock = rolling_buffer.lock().unwrap();
+                        rb_lock.extend_from_slice(&data);
+                        if rb_lock.len() > 8192 {
+                            let len = rb_lock.len();
+                            rb_lock.drain(0..len - 8192);
                         }
 
                         loop {
@@ -266,7 +273,7 @@ impl TcpManager {
                                 let rxns = reactions.lock().unwrap();
                                 for r in rxns.iter() {
                                     if !r.trigger_data.is_empty() {
-                                        if let Some(pos) = rolling_buffer
+                                        if let Some(pos) = rb_lock
                                             .windows(r.trigger_data.len())
                                             .position(|w| w == r.trigger_data)
                                         {
@@ -299,7 +306,7 @@ impl TcpManager {
                                             }
 
                                             let match_end = pos + r.trigger_data.len();
-                                            rolling_buffer.drain(0..match_end);
+                                            rb_lock.drain(0..match_end);
                                             matched = true;
                                             break;
                                         }

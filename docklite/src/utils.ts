@@ -51,3 +51,54 @@ export function bytesToHex(bytes: number[]): string {
 export function bytesToBin(bytes: number[]): string {
     return bytes.map(b => b.toString(2).padStart(8, '0')).join(' ');
 }
+
+export function filterAnsi(bytes: number[]): number[] {
+    let out: number[] = [];
+    let inAnsi = false;
+    let inOsc = false;
+
+    for (let i = 0; i < bytes.length; i++) {
+        const b = bytes[i];
+
+        if (inAnsi) {
+            // ANSI escape sequences (CSI) end with a letter
+            if ((b >= 65 && b <= 90) || (b >= 97 && b <= 122)) {
+                inAnsi = false;
+            }
+            continue;
+        }
+        if (inOsc) {
+            // OSC ends with BEL (7) or ST (ESC \)
+            if (b === 7) {
+                inOsc = false;
+            } else if (b === 27 && i + 1 < bytes.length && bytes[i + 1] === 92) {
+                inOsc = false;
+                i++; // skip the backslash
+            }
+            continue;
+        }
+
+        // Look ahead for escape sequence start
+        if (b === 27 && i + 1 < bytes.length) {
+            const next = bytes[i + 1];
+            if (next === 91) { // '[' - CSI
+                inAnsi = true;
+                i++;
+                continue;
+            } else if (next === 93) { // ']' - OSC
+                inOsc = true;
+                i++;
+                continue;
+            } else if (next === 40 || next === 41) { // '(' or ')' - G0/G1 charset
+                i += 2; // skip ESC ( B
+                continue;
+            } else if (next === 61 || next === 62) { // '=' or '>' - Application keypad
+                i++;
+                continue;
+            }
+        }
+
+        out.push(b);
+    }
+    return out;
+}

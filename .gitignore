@@ -1,0 +1,33 @@
+# Reference docklight format files - proprietary/internal use only
+ref_docklight_formats/
+
+# Plan-signal server (separate git repo)
+plan-signal/
+
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+target/
+build/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Compiled binaries
+test_tcp
+
+# Logs
+*.log
+npm-debug.log*

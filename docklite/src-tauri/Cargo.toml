@@ -28,8 +28,18 @@ chrono = { version = "0.4.42", features = ["serde"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 sha2 = "0.10"
-reqwest = { version = "0.11", features = ["blocking", "json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.11", features = ["json", "rustls-tls", "blocking"] }
 hostname = "0.3"
 whoami = "1.4"
 ssh2 = "0.9.5"
+webrtc = "0.11"
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+dashmap = "6.1.0"
+uuid = { version = "1.13", features = ["v4"] }
+rand = "0.9"
+once_cell = "1.20"
+parking_lot = "0.12"
+http = "1.4"
+
 

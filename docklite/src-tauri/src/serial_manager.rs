@@ -36,6 +36,7 @@ pub struct TabState {
     pub log_format: Arc<Mutex<crate::log_utils::LogFormat>>,
     /// seq_id -> stop-sender. Dropping the sender signals the thread to exit.
     pub periodic_senders: Arc<Mutex<HashMap<String, mpsc::SyncSender<()>>>>,
+    pub rolling_buffer: Arc<Mutex<Vec<u8>>>,
 }
 
 impl TabState {
@@ -49,6 +50,7 @@ impl TabState {
             log_file: Arc::new(Mutex::new(None)),
             log_format: Arc::new(Mutex::new(crate::log_utils::LogFormat::Jsonl)),
             periodic_senders: Arc::new(Mutex::new(HashMap::new())),
+            rolling_buffer: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -82,6 +84,10 @@ impl SerialManager {
         let tab = self.get_or_create_tab(tab_id);
         let mut r_lock = tab.reactions.lock().unwrap();
         *r_lock = new_reactions;
+
+        // Clear buffer when reactions change to avoid re-triggering on old data
+        let mut b_lock = tab.rolling_buffer.lock().unwrap();
+        b_lock.clear();
     }
 
     pub fn start_logging(
@@ -280,8 +286,8 @@ impl SerialManager {
     }
 
     pub fn close_port(&self, tab_id: &str) {
-        let mut tabs = self.tabs.lock().unwrap();
-        if let Some(tab) = tabs.remove(tab_id) {
+        let tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.get(tab_id) {
             let mut rp = tab.read_port.lock().unwrap();
             *rp = None;
             let mut wp = tab.write_port.lock().unwrap();
@@ -298,6 +304,7 @@ impl SerialManager {
         let reactions = tab.reactions.clone();
         let log_file = tab.log_file.clone();
         let log_format = tab.log_format.clone();
+        let rolling_buffer = tab.rolling_buffer.clone();
 
         let mut reader_lock = is_reading.lock().unwrap();
         if *reader_lock {
@@ -308,7 +315,6 @@ impl SerialManager {
 
         thread::spawn(move || {
             let mut serial_buf: Vec<u8> = vec![0; 4096];
-            let mut rolling_buffer: Vec<u8> = Vec::new();
 
             loop {
                 if !*is_reading.lock().unwrap() {
@@ -339,15 +345,18 @@ impl SerialManager {
                                 .unwrap()
                                 .as_millis();
 
-                            let _ =
-                                app.emit("serial-data", (tab_id.clone(), data.clone(), ts, "RX"));
+                            let _ = app.emit(
+                                "serial-data",
+                                (tab_id.clone(), data.clone(), ts as u64, "RX"),
+                            );
 
                             crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
 
-                            rolling_buffer.extend_from_slice(&data);
-                            if rolling_buffer.len() > 8192 {
-                                let len = rolling_buffer.len();
-                                rolling_buffer.drain(0..len - 8192);
+                            let mut rb_lock = rolling_buffer.lock().unwrap();
+                            rb_lock.extend_from_slice(&data);
+                            if rb_lock.len() > 8192 {
+                                let len = rb_lock.len();
+                                rb_lock.drain(0..len - 8192);
                             }
 
                             loop {
@@ -356,7 +365,7 @@ impl SerialManager {
                                     let rxns = reactions.lock().unwrap();
                                     for r in rxns.iter() {
                                         if !r.trigger_data.is_empty() {
-                                            if let Some(pos) = rolling_buffer
+                                            if let Some(pos) = rb_lock
                                                 .windows(r.trigger_data.len())
                                                 .position(|w| w == r.trigger_data)
                                             {
@@ -369,7 +378,7 @@ impl SerialManager {
                                                     (
                                                         tab_id.clone(),
                                                         r.response_data.clone(),
-                                                        ts,
+                                                        ts as u64,
                                                         "TX_AUTO",
                                                     ),
                                                 );
@@ -388,7 +397,7 @@ impl SerialManager {
                                                 );
 
                                                 let match_end = pos + r.trigger_data.len();
-                                                rolling_buffer.drain(0..match_end);
+                                                rb_lock.drain(0..match_end);
                                                 matched = true;
                                                 break;
                                             }
@@ -411,7 +420,13 @@ impl SerialManager {
         });
     }
 
-    pub fn write_data(&self, tab_id: &str, data: Vec<u8>) -> Result<(), String> {
+    pub fn write_data(
+        &self,
+        app: &AppHandle,
+        tab_id: &str,
+        data: Vec<u8>,
+        direction: &str,
+    ) -> Result<(), String> {
         let tab = self.get_or_create_tab(tab_id);
         use std::io::Write;
         let mut p = tab.write_port.lock().unwrap();
@@ -419,7 +434,26 @@ impl SerialManager {
             match port.write_all(&data) {
                 Ok(_) => {
                     let _ = port.flush();
-                    crate::log_utils::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
+                    let ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+                    // Emit event so the local terminal and the share_manager can see it
+                    let _ = app.emit(
+                        "serial-data",
+                        (
+                            tab_id.to_string(),
+                            data.clone(),
+                            ts as u64,
+                            direction.to_string(),
+                        ),
+                    );
+                    crate::log_utils::write_log_entry(
+                        &tab.log_file,
+                        &tab.log_format,
+                        &data,
+                        direction,
+                    );
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),

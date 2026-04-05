@@ -44,13 +44,18 @@ export interface SshConfig {
     auth_secret?: string; // e.g. path to private key
 }
 
+export interface RemoteConfig {
+    deviceId: string;
+}
+
 export interface Project {
     name: string;
     send_sequences: Sequence[];
     reactions: Reaction[];
     file_path?: string;
-    connection_type?: 'Serial' | 'TCP' | 'SSH';
+    connection_type?: 'Serial' | 'TCP' | 'SSH' | 'Remote';
     serial_config?: SerialConfig;
     tcp_config?: TcpConfig;
     ssh_config?: SshConfig;
+    remote_config?: RemoteConfig;
 }

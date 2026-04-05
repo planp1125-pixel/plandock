@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, useLayoutEffect, memo } from 'react';
 import { Trash2, Search, X } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -15,79 +15,38 @@ export interface LogEntry {
     timestamp: number;
     direction: "RX" | "TX";
     data: number[]; // Bytes
+    processedData?: number[]; // Pre-filtered ANSI bytes
 }
 
 interface Props {
     logs: LogEntry[];
     onClear: () => void;
     onSendCommand?: (cmd: string) => void;
+    isActive?: boolean;
+    autoScroll: boolean;
+    setAutoScroll: (val: boolean) => void;
 }
 
 type TimestampMode = "none" | "each" | "line";
 
-export function Terminal({ logs, onClear, onSendCommand }: Props) {
+export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScroll, setAutoScroll }: Props) => {
     const bottomRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const cmdInputRef = useRef<HTMLInputElement>(null);
     const [cmdText, setCmdText] = useState("");
     const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Binary" | "Decimal">("Ascii");
-    const [autoScroll, setAutoScroll] = useState(true);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+    // SCROLL REFS
+    const lastScrollHeight = useRef(0);
+    const lastScrollTop = useRef(0);
+    const wasAtBottom = useRef(true);
+    const anchorLogId = useRef<string | null>(null);
+    const anchorOffset = useRef(0);
+
     const [timestampMode, setTimestampMode] = useState<TimestampMode>("each");
     const [stripAnsi, setStripAnsi] = useState(true); // Default to clean text
 
-    // ANSI Sequence Stripper algorithm
-    const filterAnsi = useCallback((bytes: number[]): number[] => {
-        let out: number[] = [];
-        let inAnsi = false;
-        let inOsc = false;
-
-        for (let i = 0; i < bytes.length; i++) {
-            const b = bytes[i];
-
-            if (inAnsi) {
-                // ANSI escape sequences (CSI) end with a letter
-                if ((b >= 65 && b <= 90) || (b >= 97 && b <= 122)) {
-                    inAnsi = false;
-                }
-                continue;
-            }
-            if (inOsc) {
-                // OSC ends with BEL (7) or ST (ESC \)
-                if (b === 7) {
-                    inOsc = false;
-                } else if (b === 27 && i + 1 < bytes.length && bytes[i + 1] === 92) {
-                    inOsc = false;
-                    i++; // skip the backslash
-                }
-                continue;
-            }
-
-            // Look ahead for escape sequence start
-            if (b === 27 && i + 1 < bytes.length) {
-                const next = bytes[i + 1];
-                if (next === 91) { // '[' - CSI
-                    inAnsi = true;
-                    i++;
-                    continue;
-                } else if (next === 93) { // ']' - OSC
-                    inOsc = true;
-                    i++;
-                    continue;
-                } else if (next === 40 || next === 41) { // '(' or ')' - G0/G1 charset
-                    i += 2; // skip ESC ( B
-                    continue;
-                } else if (next === 61 || next === 62) { // '=' or '>' - Application keypad
-                    i++;
-                    continue;
-                }
-            }
-
-            out.push(b);
-        }
-        return out;
-    }, []);
-
-    // Search state
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [filterMode, setFilterMode] = useState(false); // true = show only matching lines
@@ -96,12 +55,20 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
         return Number(localStorage.getItem('terminal-ts-gap') || '100');
     });
 
-    // Save TS Gap to localStorage for use in App.log handling
+    // Force scroll to bottom when autoscroll is toggled ON
+    useEffect(() => {
+        if (autoScroll && scrollContainerRef.current) {
+            scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+            wasAtBottom.current = true;
+        }
+    }, [autoScroll]);
+
+    // Save TS Gap to localStorage
     useEffect(() => {
         localStorage.setItem('terminal-ts-gap', timestampGap.toString());
     }, [timestampGap]);
 
-    // Handle Ctrl+F keyboard shortcut
+    // Keyboard Shortcuts
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
             e.preventDefault();
@@ -119,11 +86,81 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [handleKeyDown]);
 
-    useEffect(() => {
-        if (autoScroll) {
-            bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+    // UNIFIED SCROLL MANAGEMENT
+    // We use useLayoutEffect because it runs synchronously after DOM mutations but BEFORE the browser paints.
+    // This allows us to adjust the scroll position without any visible 'jitter' or 'recession'.
+    useLayoutEffect(() => {
+        if (!scrollContainerRef.current) return;
+        const el = scrollContainerRef.current;
+
+        // 1. Determine state BEFORE this update actually painted
+        const distFromBottom = lastScrollHeight.current - lastScrollTop.current - el.clientHeight;
+        const wasActuallyAtBottom = distFromBottom < 100;
+
+        // 2. Core Logic Branching
+        if (isActive && autoScroll && wasActuallyAtBottom) {
+            // CASE A: Autoscroll is active and we were at the bottom.
+            // Force scroll to the new bottom immediately.
+            el.scrollTop = el.scrollHeight;
+            wasAtBottom.current = true;
+        } else if (isActive && (!autoScroll || !wasActuallyAtBottom)) {
+            // CASE B: Manual Pause or Autoscroll OFF.
+            // Use Anchor logic to keep the SAME content at the top of the screen.
+            if (anchorLogId.current) {
+                const anchoredElement = el.querySelector(`[data-log-id="${anchorLogId.current}"]`) as HTMLElement;
+                if (anchoredElement) {
+                    const containerRect = el.getBoundingClientRect();
+                    const newRect = anchoredElement.getBoundingClientRect();
+                    const currentOffset = newRect.top - containerRect.top;
+                    const diff = currentOffset - anchorOffset.current;
+                    el.scrollTop += diff;
+                }
+            }
+            // If they are manually scrolled up, we track that for next render
+            wasAtBottom.current = false;
         }
-    }, [logs, autoScroll]);
+
+        // 3. Tab Catch-up: If just activated, and we should be at bottom
+        if (isActive && autoScroll && wasActuallyAtBottom) {
+            el.scrollTop = el.scrollHeight;
+        }
+
+        // 4. Update 'Last' refs for the NEXT render cycle
+        lastScrollHeight.current = el.scrollHeight;
+        lastScrollTop.current = el.scrollTop;
+
+        // 5. Capture NEW anchor for the next log arrival
+        if (isActive) {
+            const children = el.querySelectorAll('[data-log-id]');
+            let bestId = null;
+            let bestOffset = 0;
+            for (let i = 0; i < children.length; i++) {
+                const child = children[i] as HTMLElement;
+                const rect = child.getBoundingClientRect();
+                const containerRect = el.getBoundingClientRect();
+                if (rect.top >= containerRect.top) {
+                    bestId = child.getAttribute('data-log-id');
+                    bestOffset = rect.top - containerRect.top;
+                    break;
+                }
+            }
+            anchorLogId.current = bestId;
+            anchorOffset.current = bestOffset;
+        }
+    }, [logs, autoScroll, isActive]);
+
+    const onScroll = () => {
+        if (scrollContainerRef.current && isActive) {
+            const el = scrollContainerRef.current;
+            const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+            // Capture bottom-lock state for manual scrolling
+            wasAtBottom.current = distFromBottom < 100;
+
+            // Sync current scroll position to refs so next layout effect has accurate data
+            lastScrollHeight.current = el.scrollHeight;
+            lastScrollTop.current = el.scrollTop;
+        }
+    };
 
     const [formatMode, setFormatMode] = useState<"Stream" | "Formatted">("Formatted");
 
@@ -175,9 +212,7 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
             for (let i = 0; i < bytes.length; i++) {
                 const b = bytes[i];
                 if (b < 32 || b === 127) {
-                    // Flush accumulated string
                     flushString(`s-${i}`);
-
                     const name = CONTROL_CHAR_NAMES[b] || "??";
                     const color = b === 13 ? "text-orange-500" :
                         b === 10 ? "text-blue-500" :
@@ -192,13 +227,10 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
                         </span>
                     );
 
-                    // Newline Logic
                     if (formatMode === 'Formatted') {
                         if (b === 13) {
-                            // If this is CR
                             if (i + 1 < bytes.length && bytes[i + 1] === 10) {
-                                // Next is LF, handle it now
-                                i++; // Skip next iteration
+                                i++;
                                 elements.push(
                                     <span key={`c-${i}`}>
                                         <span className="font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5 text-blue-500">
@@ -206,14 +238,11 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
                                         </span>
                                     </span>
                                 );
-                                // Single break for CR+LF
                                 elements.push(<br key={`br-${i}`} />);
                             } else {
-                                // Just CR
                                 elements.push(<br key={`br-${i}`} />);
                             }
                         } else if (b === 10) {
-                            // Just LF (not preceded by CR because we cleared it)
                             elements.push(<br key={`br-${i}`} />);
                         }
                     }
@@ -221,22 +250,17 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
                     currentString += String.fromCharCode(b);
                 }
             }
-
             flushString("final-s");
-
             return elements;
         }
     };
 
-    // Plain text version for searching (works in both modes)
     const getSearchableText = (bytes: number[]): string => {
         if (viewMode === 'Hex') return bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
         if (viewMode === 'Binary') return bytes.map(b => b.toString(2).padStart(8, '0')).join(' ');
         if (viewMode === 'Decimal') return bytes.map(b => b.toString(10)).join(' ');
         return bytes.map(b => {
-            if (b < 32 || b === 127) {
-                return `<${CONTROL_CHAR_NAMES[b] || "??"}>`;
-            }
+            if (b < 32 || b === 127) return `<${CONTROL_CHAR_NAMES[b] || "??"}>`;
             return String.fromCharCode(b);
         }).join('');
     };
@@ -247,84 +271,41 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
             <div className="flex justify-between items-center p-2 bg-zinc-900 border-b border-zinc-800 flex-wrap gap-2">
                 <div className="flex gap-2">
                     <div className="flex bg-zinc-800 rounded p-0.5 text-xs">
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Ascii' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setViewMode('Ascii')}
-                        >ASCII</button>
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Hex' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setViewMode('Hex')}
-                        >HEX</button>
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Decimal' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setViewMode('Decimal')}
-                        >DEC</button>
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Binary' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setViewMode('Binary')}
-                        >BIN</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Ascii' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setViewMode('Ascii')}>ASCII</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Hex' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setViewMode('Hex')}>HEX</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Decimal' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setViewMode('Decimal')}>DEC</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Binary' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setViewMode('Binary')}>BIN</button>
                     </div>
-
-                    <div className="border-l border-zinc-700 mx-1" />
 
                     <div className="flex bg-zinc-800 rounded p-0.5 text-xs">
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", formatMode === 'Stream' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setFormatMode('Stream')}
-                            title="Show raw stream (no extra line breaks)"
-                        >Stream</button>
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", formatMode === 'Formatted' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setFormatMode('Formatted')}
-                            title="Wrap lines on LF characters"
-                        >Formatted</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", formatMode === 'Stream' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setFormatMode('Stream')}>Stream</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", formatMode === 'Formatted' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setFormatMode('Formatted')}>Formatted</button>
                     </div>
 
-                    <div className="border-l border-zinc-700 mx-1" />
-
                     <div className="flex items-center gap-1 text-xs">
-                        <span className="text-zinc-400">TS Gap:</span>
-                        <input
-                            type="number"
-                            className="w-12 bg-zinc-800 text-white rounded px-1 py-0.5 text-center no-spinner"
-                            value={timestampGap}
-                            onChange={(e) => setTimestampGap(Math.max(0, parseInt(e.target.value) || 0))}
-                            title="Timestamp Gap (ms). Data arriving within this window shares one timestamp."
-                        />
+                        <span className="text-zinc-400 ml-1">Gap:</span>
+                        <input type="number" className="w-10 bg-zinc-800 text-white rounded px-1 py-0.5 text-center no-spinner" value={timestampGap} onChange={(e) => setTimestampGap(Math.max(0, parseInt(e.target.value) || 0))} />
                         <span className="text-zinc-500">ms</span>
                     </div>
 
-                    <div className="border-l border-zinc-700 mx-1" />
-
                     <div className="flex bg-zinc-800 rounded p-0.5 text-xs">
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", timestampMode === 'none' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setTimestampMode('none')}
-                            title="Hide timestamps"
-                        >No Time</button>
-                        <button
-                            className={clsx("px-2 py-0.5 rounded text-gray-300", timestampMode === 'each' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')}
-                            onClick={() => setTimestampMode('each')}
-                            title="Show timestamp for each entry"
-                        >Timestamp</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", timestampMode === 'none' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setTimestampMode('none')}>No Time</button>
+                        <button className={clsx("px-2 py-0.5 rounded text-gray-300", timestampMode === 'each' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setTimestampMode('each')}>Time</button>
                     </div>
                 </div>
                 <div className="flex gap-2 items-center">
-                    <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none" title="Clean Text (Strip ANSI Sequences)">
+                    <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none">
                         <input type="checkbox" checked={stripAnsi} onChange={e => setStripAnsi(e.target.checked)} />
-                        Clean Text
+                        Clean
                     </label>
                     <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none">
                         <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
                         Auto-scroll
                     </label>
-                    <button onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50); }} className={clsx("p-1 hover:text-white", searchOpen && "text-yellow-400")} title="Search (Ctrl+F)">
+                    <button onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50); }} className={clsx("p-1 hover:text-white", searchOpen && "text-yellow-400")}>
                         <Search className="w-4 h-4" />
                     </button>
-
-                    <button onClick={onClear} className="p-1 hover:text-red-400" title="Clear">
-                        <Trash2 className="w-4 h-4" />
-                    </button>
+                    <button onClick={onClear} className="p-1 hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
                 </div>
             </div>
 
@@ -332,62 +313,42 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
             {searchOpen && (
                 <div className="flex items-center gap-2 px-4 py-2 bg-zinc-800 border-b border-zinc-700">
                     <Search className="w-4 h-4 text-zinc-500" />
-                    <input
-                        ref={searchInputRef}
-                        type="text"
-                        placeholder="Search... (ESC to close)"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="flex-1 bg-zinc-900 text-white rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500"
-                    />
+                    <input ref={searchInputRef} type="text" placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="flex-1 bg-zinc-900 text-white rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-yellow-500" />
                     <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none">
-                        <input type="checkbox" checked={filterMode} onChange={e => setFilterMode(e.target.checked)} />
-                        Filter
+                        <input type="checkbox" checked={filterMode} onChange={e => setFilterMode(e.target.checked)} /> Filter
                     </label>
                     {searchQuery && (
                         <span className="text-xs text-zinc-500">
-                            {logs.filter(log => {
-                                const text = getSearchableText(stripAnsi ? filterAnsi(log.data) : log.data);
-                                return text.toLowerCase().includes(searchQuery.toLowerCase());
-                            }).length} matches
+                            {logs.filter(log => getSearchableText(log.processedData || log.data).toLowerCase().includes(searchQuery.toLowerCase())).length} matches
                         </span>
                     )}
-                    <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 hover:text-red-400" title="Close">
-                        <X className="w-4 h-4" />
-                    </button>
+                    <button onClick={() => { setSearchOpen(false); setSearchQuery(""); }} className="p-1 hover:text-red-400"><X className="w-4 h-4" /></button>
                 </div>
             )}
 
             {/* Log Area */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-1">
-                {/* Windowed rendering: only show last 500 logs in DOM, but keeps 10k in memory */}
-                {logs.slice(-500)
-                    .map(log => {
-                        const processedData = stripAnsi ? filterAnsi(log.data) : log.data;
-                        return { ...log, processedData };
-                    })
-                    .filter(log => {
-                        if (!searchQuery || !filterMode) return true;
-                        const text = getSearchableText(log.processedData);
-                        return text.toLowerCase().includes(searchQuery.toLowerCase());
-                    })
-                    .map(log => (
-                        <div key={log.id} className="flex gap-2 hover:bg-zinc-900/50">
-                            {timestampMode !== 'none' && (
-                                <span className="text-zinc-500 select-none">[{formatTimestamp(log.timestamp)}]</span>
-                            )}
-                            <span className={log.direction === 'TX' ? "text-blue-400 font-bold" : "text-orange-400 font-bold"}>
-                                {log.direction}
-                            </span>
+            <div
+                ref={scrollContainerRef}
+                className="flex-1 overflow-y-auto p-4 space-y-1"
+                style={{ overflowAnchor: 'none' }}
+                onScroll={onScroll}
+            >
+                {logs.slice(-1000).map(log => {
+                    const processedData = log.processedData || log.data;
+                    if (searchQuery && filterMode && !getSearchableText(processedData).toLowerCase().includes(searchQuery.toLowerCase())) return null;
+                    return (
+                        <div key={log.id} data-log-id={log.id} className="flex gap-2 hover:bg-zinc-900/50">
+                            {timestampMode !== 'none' && <span className="text-zinc-500 select-none">[{formatTimestamp(log.timestamp)}]</span>}
+                            <span className={log.direction === 'TX' ? "text-blue-400 font-bold" : "text-orange-400 font-bold"}>{log.direction}</span>
                             <span className={clsx("break-all whitespace-pre-wrap", log.direction === 'TX' ? "text-cyan-400" : "text-yellow-400")}>
-                                {renderData(log.processedData, searchQuery || undefined)}
+                                {renderData(processedData, searchQuery || undefined)}
                             </span>
                         </div>
-                    ))}
+                    );
+                })}
                 <div ref={bottomRef} />
             </div>
 
-            {/* Interactive Command Input Bar (SSH Mode) */}
             {onSendCommand && (
                 <div className="flex bg-zinc-900 border-t border-zinc-700/50 p-2 gap-2 shadow-inner">
                     <span className="text-green-500 font-mono self-center text-sm ml-2">$&gt;</span>
@@ -422,4 +383,4 @@ export function Terminal({ logs, onClear, onSendCommand }: Props) {
             )}
         </div>
     );
-}
+});

@@ -4,6 +4,8 @@ mod tcp_manager;
 mod serial_manager;
 mod ssh_manager;
 mod log_utils;
+mod share_manager;
+
 use license::{LicenseManager, LicenseStatus};
 use project_manager::{load_project, save_project, import_ptp_file, Project, Reaction};
 use serial_manager::{PortInfo, SerialConfig, SerialManager};
@@ -66,10 +68,10 @@ fn close_serial_port(state: State<'_, Arc<SerialManager>>, tab_id: String) {
 }
 
 #[tauri::command]
-async fn send_serial_data(state: State<'_, Arc<SerialManager>>, tab_id: String, data: Vec<u8>) -> Result<(), String> {
+async fn send_serial_data(app: AppHandle, state: State<'_, Arc<SerialManager>>, tab_id: String, data: Vec<u8>) -> Result<(), String> {
     let manager = state.inner().clone();
     std::thread::spawn(move || {
-        let _ = manager.write_data(&tab_id, data);
+        let _ = manager.write_data(&app, &tab_id, data, "TX");
     });
     Ok(()) 
 }
@@ -431,6 +433,49 @@ fn stop_recording(tab_id: String) {
 }
 
 
+#[tauri::command]
+async fn start_remote_sharing(
+    app: AppHandle,
+    serial: State<'_, Arc<SerialManager>>,
+    tcp: State<'_, Arc<TcpManager>>,
+    ssh: State<'_, Arc<SshManager>>,
+    name: String
+) -> Result<String, String> {
+    let signal_url = "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string();
+    share_manager::start_sharing(
+        app,
+        serial.inner().clone(),
+        tcp.inner().clone(),
+        ssh.inner().clone(),
+        name,
+        signal_url
+    ).await
+}
+
+#[tauri::command]
+async fn stop_remote_sharing() -> Result<(), String> {
+    share_manager::stop_sharing().await
+}
+
+#[tauri::command]
+async fn get_remote_device_id() -> Option<String> {
+    share_manager::get_display_id().await
+}
+
+#[tauri::command]
+async fn connect_remote(tab_id: String, device_id: String) -> Result<(), String> {
+    share_manager::connect_remote(tab_id, device_id).await
+}
+
+#[tauri::command]
+async fn process_supabase_offer(app: AppHandle, to_id: String, from_id: String, sdp: String) -> Result<String, String> {
+    share_manager::handle_supabase_offer(app, to_id, from_id, sdp).await
+}
+
+#[tauri::command]
+async fn process_supabase_candidate(from_id: String, candidate: String) -> Result<(), String> {
+    share_manager::handle_supabase_candidate(from_id, candidate).await
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -480,7 +525,15 @@ pub fn run() {
             stop_all_periodic_sequences,
             pause_recording,
             resume_recording,
-            stop_recording
+            stop_recording,
+            start_remote_sharing,
+            stop_remote_sharing,
+            get_remote_device_id,
+            connect_remote,
+            process_supabase_offer,
+            process_supabase_candidate,
+            share_manager::share_active_tab,
+            share_manager::send_remote_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

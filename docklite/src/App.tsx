@@ -1,20 +1,31 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Workspace } from "./components/Workspace";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { LicenseDialog } from "./components/LicenseDialog";
 import { LicenseProvider } from "./contexts/LicenseContext";
-import { Moon, Sun, Crown, X, Plus } from "lucide-react";
+import { Moon, Sun, Crown, X, Plus, Share2, Users } from "lucide-react";
+
 import logo from "./assets/logo.png";
+import { RemoteAccessDialog } from "./components/RemoteAccessDialog";
 import "./index.css";
+
+
+import { useRemote } from "./contexts/RemoteContext";
 
 interface Tab {
   id: string;
   name: string;
   connected: boolean;
   connLabel: string;
+  type?: 'Serial' | 'TCP' | 'SSH' | 'Remote';
+  remoteChannel?: any;
+  peerId?: string;
 }
 
 function App() {
-  const [tabs, setTabs] = useState<Tab[]>([{ id: 'main', name: 'New Project', connected: false, connLabel: '' }]);
+  const { incomingCall, isSharing, deviceName, activePeers } = useRemote();
+  const [tabs, setTabs] = useState<Tab[]>([{ id: 'main', name: 'New Project', connected: false, connLabel: '', type: 'Serial' }]);
   const [activeTabId, setActiveTabId] = useState('main');
 
   const [showLicenseDialog, setShowLicenseDialog] = useState(false);
@@ -22,6 +33,95 @@ function App() {
     const saved = localStorage.getItem('darkMode');
     return saved ? saved === 'true' : true;
   });
+
+  const [showRemoteDialog, setShowRemoteDialog] = useState(false);
+  const [autoScroll, setAutoScroll] = useState(() => {
+    const saved = localStorage.getItem('terminal-autoscroll');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  // Listen for global remote channel events
+  useEffect(() => {
+    const handleRemoteOpen = (e: any) => {
+      const { channel, fromId } = e.detail;
+      const label = channel.label;
+      console.log(`[App] Remote DataChannel OPEN: ${label} from ${fromId}`);
+
+      setTabs(prev => {
+        // If it's a specific shared tab (e.g. serial-xxx)
+        if (label.startsWith('serial-') || label.startsWith('ssh-') || label.startsWith('remote-')) {
+          const existing = prev.find(t => t.id === label);
+          if (existing) {
+            return prev.map(t => t.id === label ? { ...t, connected: true, remoteChannel: channel } : t);
+          }
+          return [...prev, {
+            id: label,
+            name: `Remote: ${label.split('-')[0]} (${fromId})`,
+            connected: true,
+            connLabel: label,
+            type: 'Remote',
+            remoteChannel: channel,
+            peerId: fromId
+          }];
+        }
+
+        // Default signaling channel
+        const existing = prev.find(t => t.id === fromId);
+        if (existing) {
+          return prev.map(t => t.id === fromId ? { ...t, connected: true, remoteChannel: channel, peerId: fromId } : t);
+        }
+        return [...prev, {
+          id: fromId,
+          name: `Remote: ${fromId}`,
+          connected: true,
+          connLabel: fromId,
+          type: 'Remote',
+          remoteChannel: channel,
+          peerId: fromId
+        }];
+      });
+
+      if (label.startsWith('serial-') || label.startsWith('ssh-')) {
+        setActiveTabId(label);
+      }
+    };
+
+    window.addEventListener('remote-channel-open', handleRemoteOpen);
+
+    // Listen for mirroring events from Rust (Tauri Client side)
+    const unlistenOpen = listen<[string, string]>('remote-channel-open', (event) => {
+      const [fromId, label] = event.payload;
+      // Synthesize the same object structure as the CustomEvent for reuse
+      handleRemoteOpen({ detail: { channel: { label }, fromId } });
+    });
+
+    // Listen for mirroring events from Rust (Host side explicitly created tabs)
+    const unlistenCreated = listen<any>('remote-tab-created', (event) => {
+      const [tabId, peerId, portName] = event.payload;
+      setTabs(prev => {
+        if (prev.find(t => t.id === tabId)) return prev;
+        return [...prev, {
+          id: tabId,
+          name: `Mirror: ${portName} (${peerId})`,
+          connected: true,
+          connLabel: portName,
+          type: 'Serial' // On host it acts like a normal serial tab
+        }];
+      });
+      setActiveTabId(tabId);
+    });
+
+    return () => {
+      window.removeEventListener('remote-channel-open', handleRemoteOpen);
+      unlistenOpen.then(u => u());
+      unlistenCreated.then(u => u());
+    };
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('terminal-autoscroll', String(autoScroll));
+  }, [autoScroll]);
+
 
   useEffect(() => {
     if (darkMode) {
@@ -41,25 +141,40 @@ function App() {
 
   const addTab = () => {
     const id = Math.random().toString(36).substring(2, 9);
-    setTabs([...tabs, { id, name: 'New Project', connected: false, connLabel: '' }]);
+    setTabs([...tabs, { id, name: 'New Project', connected: false, connLabel: '', type: 'Serial' }]);
     setActiveTabId(id);
   };
 
-  const closeTab = (e: React.MouseEvent, id: string) => {
+  const closeTab = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (tabs.length === 1) return;
+
+    // Cleanup backend connections for this tab before removing it from state
+    const tab = tabs.find(t => t.id === id);
+    if (tab?.type === 'Remote' && tab.remoteChannel) {
+      tab.remoteChannel.close();
+    } else {
+      try {
+        await invoke("close_serial_port", { tabId: id });
+        await invoke("disconnect_tcp", { tabId: id });
+        await invoke("disconnect_ssh", { tabId: id });
+      } catch (err) {
+        console.error("Cleanup failed for tab", id, err);
+      }
+    }
+
     const newTabs = tabs.filter(t => t.id !== id);
     setTabs(newTabs);
     if (activeTabId === id) setActiveTabId(newTabs[newTabs.length - 1].id);
   };
 
-  const updateTabConn = (id: string, connected: boolean, label: string) => {
+  const updateTabConn = useCallback((id: string, connected: boolean, label: string) => {
     setTabs(prev => prev.map(t => t.id === id ? { ...t, connected, connLabel: label } : t));
-  };
+  }, []);
 
-  const updateTabName = (id: string, name: string) => {
+  const updateTabName = useCallback((id: string, name: string) => {
     setTabs(prev => prev.map(t => t.id === id && t.name !== name ? { ...t, name } : t));
-  };
+  }, []);
 
   return (
     <div className="h-screen w-screen bg-background text-foreground flex flex-col overflow-hidden">
@@ -123,11 +238,73 @@ function App() {
           <button onClick={() => setShowLicenseDialog(true)} className="p-1.5 hover:bg-accent rounded text-amber-500 outline-none" title="License Pro">
             <Crown className="w-4 h-4" />
           </button>
+          <div className="w-px h-4 bg-border mx-1" />
+          <button
+            onClick={() => setShowRemoteDialog(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/30 rounded-md transition-all text-[11px] font-bold uppercase tracking-tight"
+            title="Remote Access & Sharing"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            Remote
+          </button>
         </div>
       </header>
 
-      {/* WORKSPACES */}
-      <main className="flex-1 relative overflow-hidden bg-background">
+      {/* INCOMING CALL BANNER */}
+      {incomingCall && (
+        <div className="bg-blue-600 text-white px-4 py-2 flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-300">
+          <div className="flex items-center gap-3">
+            <Share2 className="w-4 h-4 animate-pulse" />
+            <span className="text-xs font-bold">Incoming WebRTC Call from <span className="font-mono">{incomingCall.fromId}</span></span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={incomingCall.reject}
+              className="px-3 py-1 text-[10px] uppercase font-bold hover:bg-black/10 rounded"
+            >
+              Ignore
+            </button>
+            <button
+              onClick={incomingCall.accept}
+              className="bg-white text-blue-600 px-4 py-1 rounded shadow-md text-[10px] font-bold uppercase"
+            >
+              Accept
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col min-h-0 bg-background relative">
+        {/* Remote Status Indicator (Visible when sharing or connected) */}
+        {(isSharing || Object.keys(activePeers).length > 0) && (
+          <div className="bg-blue-600/10 border-b border-blue-500/20 px-3 py-1 flex items-center justify-between animate-in slide-in-from-top duration-300">
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isSharing ? 'bg-green-500 animate-pulse' : 'bg-zinc-500'}`} />
+              <span className="text-[10px] font-bold uppercase tracking-tight text-blue-500">
+                {isSharing ? `Hosting: ${deviceName || 'Unnamed'}` : 'Remote Engine Standby'}
+              </span>
+              {Object.keys(activePeers).length > 0 && (
+                <div className="flex items-center gap-1.5 ml-3 pl-3 border-l border-blue-500/20">
+                  <span className="text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded-full font-bold">
+                    {Object.keys(activePeers).length} PEERS
+                  </span>
+                  <span className="text-[9px] text-blue-500/70 font-mono">
+                    {Object.keys(activePeers).map(p => p.slice(0, 11)).join(', ')}
+                  </span>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => setShowRemoteDialog(true)}
+              className="text-[9px] font-bold text-blue-500 hover:text-blue-400 uppercase flex items-center gap-1 transition-colors"
+            >
+              <Users className="w-3 h-3" />
+              Manage Hub
+            </button>
+          </div>
+        )}
+
         {tabs.map(tab => (
           <Workspace
             key={tab.id}
@@ -136,11 +313,17 @@ function App() {
             darkMode={darkMode}
             onConnectionStatusChange={updateTabConn}
             onProjectNameChange={updateTabName}
+            autoScroll={autoScroll}
+            setAutoScroll={setAutoScroll}
+            remoteChannel={tab.remoteChannel}
+            peerId={tab.peerId}
+            activePeers={activePeers}
           />
         ))}
       </main>
 
       <LicenseDialog isOpen={showLicenseDialog} onClose={() => setShowLicenseDialog(false)} />
+      <RemoteAccessDialog isOpen={showRemoteDialog} onClose={() => setShowRemoteDialog(false)} activeTabId={activeTabId} />
     </div>
   );
 }
