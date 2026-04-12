@@ -7,7 +7,7 @@ mod log_utils;
 mod share_manager;
 
 use license::{LicenseManager, LicenseStatus};
-use project_manager::{load_project, save_project, import_ptp_file, Project, Reaction};
+use project_manager::{load_project, save_project, import_ptp_file, Project};
 use serial_manager::{PortInfo, SerialConfig, SerialManager};
 use tcp_manager::TcpManager;
 use ssh_manager::SshManager;
@@ -463,8 +463,13 @@ async fn get_remote_device_id() -> Option<String> {
 }
 
 #[tauri::command]
-async fn connect_remote(tab_id: String, device_id: String) -> Result<(), String> {
-    share_manager::connect_remote(tab_id, device_id).await
+async fn get_machine_id(app: AppHandle) -> String {
+    share_manager::get_machine_id_pub(&app)
+}
+
+#[tauri::command]
+async fn connect_remote(app: AppHandle, tab_id: String, device_id: String) -> Result<(), String> {
+    share_manager::connect_remote(app, tab_id, device_id).await
 }
 
 #[tauri::command]
@@ -487,11 +492,41 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir().expect("Failed to get app data dir");
             let license_manager = LicenseManager::new(app_data_dir);
             app.manage(license_manager);
+
+            // Create managers here so we can share them with MANAGER_CONTEXT
+            let serial = Arc::new(SerialManager::new());
+            let tcp    = Arc::new(TcpManager::new());
+            let ssh    = Arc::new(SshManager::new());
+
+            app.manage(serial.clone());
+            app.manage(tcp.clone());
+            app.manage(ssh.clone());
+
+            // AUTO-INIT SIGNALING — claim device ID, set MANAGER_CONTEXT, notify frontend
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match share_manager::ensure_signaling_active(
+                    app_handle.clone(),
+                    "unknown".to_string(),
+                    "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string()
+                ).await {
+                    Ok(device_id) => {
+                        // Set MANAGER_CONTEXT so data routing works even before user clicks "Share"
+                        *share_manager::MANAGER_CONTEXT.lock().await = Some(share_manager::ManagerContext {
+                            serial,
+                            tcp,
+                            ssh,
+                            app: app_handle.clone(),
+                        });
+                        // Tell the frontend which ID Rust claimed — fixes the ID mismatch
+                        let _ = app_handle.emit("remote-id-ready", device_id);
+                    }
+                    Err(e) => eprintln!("[SIGNAL] Auto-init failed: {}", e),
+                }
+            });
+
             Ok(())
         })
-        .manage(Arc::new(SerialManager::new()))
-        .manage(Arc::new(TcpManager::new()))
-        .manage(Arc::new(SshManager::new()))
         .invoke_handler(tauri::generate_handler![
             greet,
             list_serial_ports,
@@ -529,9 +564,11 @@ pub fn run() {
             start_remote_sharing,
             stop_remote_sharing,
             get_remote_device_id,
+            get_machine_id,
             connect_remote,
             process_supabase_offer,
             process_supabase_candidate,
+            share_manager::accept_remote_offer,
             share_manager::share_active_tab,
             share_manager::send_remote_data
         ])

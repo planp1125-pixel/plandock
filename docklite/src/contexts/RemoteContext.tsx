@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { supabase } from '../utils/supabase';
 import { RemoteSignaling } from '../utils/remote_signaling';
+import { safeInvoke, safeListen } from '../utils/tauri';
 
 interface IncomingCall {
     fromId: string;
@@ -39,28 +39,46 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const channelRef = useRef<any>(null);
 
     useEffect(() => {
-        // Listen for mirroring events from Rust (Host side)
-        let unlistenConn: any;
-        let unlistenDisc: any;
+        let unlistenConn: (() => void) | undefined;
+        let unlistenChan: (() => void) | undefined;
+        let unlistenDisc: (() => void) | undefined;
 
-        import("@tauri-apps/api/event").then(({ listen }) => {
-            unlistenConn = listen<string>('remote-peer-connected', (event) => {
+        const setupListeners = async () => {
+            unlistenConn = await safeListen<string>('remote-peer-connected', (event) => {
                 setActivePeers(prev => ({ ...prev, [event.payload]: { id: event.payload, status: 'connected' } }));
                 addLog(`Peer CONNECTED: ${event.payload}`);
             });
-            listen<any>('remote-channel-open', (event) => {
-                const [fromId, label] = event.payload;
-                addLog(`P2P Channel OPEN: ${label} from ${fromId}`);
-                // Relay to internal JS event system so App.tsx works the same way
-                const customEvent = new CustomEvent('remote-channel-open', {
-                    detail: {
-                        channel: { label, send: (data: any) => invoke('send_remote_data', { peerId: fromId, label, data: Array.from(new Uint8Array(data)) }) },
-                        fromId
-                    }
+
+            // Handle WebRTC Offers received by Rust (Host side)
+            await safeListen<[string, string]>('remote-offer', (event) => {
+                const [fromId, sdp] = event.payload;
+                setIncomingCall({
+                    fromId,
+                    accept: () => {
+                        setActivePeers(prev => ({ ...prev, [fromId]: { id: fromId, status: 'connecting' } }));
+                        safeInvoke('accept_remote_offer', { fromId, sdp })
+                            .catch(e => console.error("Failed to accept offer:", e));
+                        setIncomingCall(null);
+                    },
+                    reject: () => { setIncomingCall(null); }
                 });
-                window.dispatchEvent(customEvent);
             });
-            unlistenDisc = listen<string>('remote-peer-disconnected', (event) => {
+
+            // Handle WebRTC DataChannels opened by Rust (Tauri Host side)
+            unlistenChan = await safeListen<[string, string]>('remote-channel-open', (event) => {
+                const [peerId, label] = event.payload;
+                setActivePeers(prev => ({
+                    ...prev,
+                    [peerId]: { id: peerId, status: 'connected', label }
+                }));
+                addLog(`P2P Channel OPEN (Rust): ${label} from ${peerId}`);
+
+                window.dispatchEvent(new CustomEvent('remote-channel-open', {
+                    detail: { channel: { label }, fromId: peerId }
+                }));
+            });
+
+            unlistenDisc = await safeListen<string>('remote-peer-disconnected', (event) => {
                 setActivePeers(prev => {
                     const next = { ...prev };
                     delete next[event.payload];
@@ -68,11 +86,14 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 });
                 addLog(`Peer DISCONNECTED: ${event.payload}`);
             });
-        }).catch(() => { });
+        };
+
+        setupListeners();
 
         return () => {
-            if (unlistenConn) unlistenConn.then((f: any) => f());
-            if (unlistenDisc) unlistenDisc.then((f: any) => f());
+            if (unlistenConn) unlistenConn();
+            if (unlistenChan) unlistenChan();
+            if (unlistenDisc) unlistenDisc();
         };
     }, []);
 
@@ -81,17 +102,50 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     };
 
     const loadConfig = async () => {
-        let dId = localStorage.getItem('remote-device-id');
+        const savedName = localStorage.getItem('remote-device-name') || "My Device";
+        setDeviceName(savedName);
+
+        // Fetch real machine_id from Rust and cache it in localStorage
+        try {
+            const mId = await safeInvoke<string>('get_machine_id');
+            if (mId) localStorage.setItem('remote-machine-id', mId);
+        } catch (e) {
+            // Web mode — machine_id not available from Rust
+        }
+
+        // In Tauri mode, Rust auto-init will emit 'remote-id-ready' with the correct ID.
+        // We still try to get the current ID synchronously in case it was already claimed.
+        let dId: string | null = null;
+        try {
+            const rId = await safeInvoke<string | null>('get_remote_device_id');
+            if (rId) {
+                dId = rId;
+                console.log("[RemoteContext] Got ID from Rust (already claimed):", dId);
+            }
+        } catch (e) { /* not yet claimed */ }
+
+        // Web mode fallback: use localStorage or claim from server
         if (!dId) {
-            // Generate unique ID initially
-            const segment = () => Math.floor(100 + Math.random() * 900).toString();
-            dId = `${segment()}-${segment()}-${segment()}`;
-            localStorage.setItem('remote-device-id', dId);
+            dId = localStorage.getItem('remote-device-id');
+        }
+        if (!dId) {
+            try {
+                const mId = localStorage.getItem('remote-machine-id') || "browser-" + Math.random().toString(36).substring(7);
+                const resp = await fetch("https://plan-signal-29066723448.asia-south1.run.app/claim-id", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: savedName, os: "Web", machine_id: mId })
+                });
+                const data = await resp.json();
+                dId = data.device_id;
+                if (dId) localStorage.setItem('remote-device-id', dId);
+            } catch (e) {
+                console.error("[RemoteContext] Failed to claim ID from server", e);
+                const segment = () => Math.floor(100 + Math.random() * 900).toString();
+                dId = `${segment()}-${segment()}-${segment()}`;
+            }
         }
         setDeviceId(dId);
-
-        const savedName = localStorage.getItem('remote-device-name');
-        if (savedName) setDeviceName(savedName);
 
         const sharing = localStorage.getItem('remote-sharing-active') === 'true';
         if (sharing) setIsSharing(true);
@@ -102,34 +156,42 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     useEffect(() => {
         const init = async () => {
             await loadConfig();
-            // Re-sync with Rust if we were sharing
-            const sharing = localStorage.getItem('remote-sharing-active') === 'true';
-            const dId = localStorage.getItem('remote-device-id');
-            if (sharing && dId) {
-                console.log("[RemoteContext] Restoring Rust sharing state for:", dId);
-                try {
-                    await invoke('start_remote_sharing', { name: dId });
-                } catch (e) {
-                    // Ignore on WEB since no backend exists
-                    if (!(window as any).__TAURI_INTERNALS__) {
-                        console.log("[RemoteContext] Running on Web, bypassing Rust init.");
-                    } else {
-                        console.error("[RemoteContext] Failed to restore Rust sharing state", e);
-                    }
-                }
-                setIsBackendReady(true);
-            } else {
-                setIsBackendReady(true);
-            }
+            setIsBackendReady(true);
         };
         init();
     }, []);
 
-    // Heartbeat & Name Sync
+    // Sync ID from Rust — fires after auto-init claims the device ID from the server.
+    // Also immediately upserts to Supabase so the device is discoverable right away.
     useEffect(() => {
-        if (!isSharing || !deviceId) return;
+        const unlisten = safeListen<string>('remote-id-ready', (event) => {
+            const id = event.payload;
+            console.log("[RemoteContext] Rust claimed device ID:", id);
+            setDeviceId(id);
+            localStorage.setItem('remote-device-id', id);
 
-        localStorage.setItem('remote-sharing-active', 'true');
+            // Immediately register in Supabase — don't wait for state effects to cycle
+            const mId = localStorage.getItem('remote-machine-id') || 'unknown';
+            const name = localStorage.getItem('remote-device-name') || 'My Device';
+            supabase.from('remote_devices').upsert({
+                id,
+                machine_id: mId,
+                name,
+                status: 'available',
+                last_seen: new Date().toISOString()
+            }).then(({ error }) => {
+                if (error) console.error("[RemoteContext] Supabase upsert failed:", error);
+                else console.log("[RemoteContext] Device registered in Supabase:", id);
+            });
+        });
+        return () => { unlisten.then(f => f()); };
+    }, []);
+
+    // Supabase presence sync — runs whenever we have a deviceId, regardless of isSharing.
+    // This ensures the device is always discoverable by the web app even if sharing was never toggled.
+    useEffect(() => {
+        if (!deviceId) return;
+
         localStorage.setItem('remote-device-name', deviceName);
 
         const sync = async () => {
@@ -138,7 +200,7 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 id: deviceId,
                 machine_id: mId,
                 name: deviceName,
-                status: 'online',
+                status: isSharing ? 'online' : 'available',
                 last_seen: new Date().toISOString()
             });
         };
@@ -146,16 +208,31 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         sync();
         const interval = setInterval(sync, 30000);
         return () => clearInterval(interval);
-    }, [isSharing, deviceId, deviceName]);
+    }, [deviceId, isSharing, deviceName]);
+
+    // Mark offline in Supabase when sharing is explicitly stopped
+    useEffect(() => {
+        if (!isSharing) return;
+        localStorage.setItem('remote-sharing-active', 'true');
+        return () => {
+            localStorage.setItem('remote-sharing-active', 'false');
+            if (deviceId) {
+                supabase.from('remote_devices').update({ status: 'offline' }).eq('id', deviceId);
+            }
+        };
+    }, [isSharing, deviceId]);
 
     // Signaling Listener
     useEffect(() => {
-        if (deviceId && isBackendReady) {
+        let retryTimer: any;
+
+        const start = () => {
+            if (!deviceId || !isBackendReady) return;
+
             setSignalingStatus("initializing...");
             signalingRef.current = new RemoteSignaling(
                 deviceId,
                 (channel, peerId) => {
-                    // Global DataChannel handler
                     addLog(`P2P DataChannel OPEN: ${channel.label} from ${peerId}`);
                     setActivePeers(prev => ({ ...prev, [peerId]: { id: peerId, status: 'connected', channel } }));
 
@@ -188,10 +265,16 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             signalingRef.current.startListening().then(c => {
                 channelRef.current = c;
                 setSignalingStatus("listening");
-            }).catch(() => setSignalingStatus("error"));
-        }
+            }).catch(() => {
+                setSignalingStatus("error - retrying in 5s");
+                retryTimer = setTimeout(start, 5000);
+            });
+        };
+
+        start();
 
         return () => {
+            if (retryTimer) clearTimeout(retryTimer);
             if (channelRef.current) supabase.removeChannel(channelRef.current);
             signalingRef.current = null;
             setSignalingStatus("idle");
@@ -205,16 +288,13 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
         if (next && deviceId) {
             try {
-                await invoke("start_remote_sharing", { name: deviceId });
+                await safeInvoke("start_remote_sharing", { name: deviceId });
             } catch (e) {
                 console.error("[RemoteContext] Failed to start sharing backend:", e);
             }
         } else if (!next) {
-            if (deviceId) {
-                await supabase.from('remote_devices').update({ status: 'offline' }).eq('id', deviceId);
-            }
             try {
-                await invoke("stop_remote_sharing");
+                await safeInvoke("stop_remote_sharing");
             } catch (e) {
                 console.error("[RemoteContext] Failed to stop sharing backend:", e);
             }

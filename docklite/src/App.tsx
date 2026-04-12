@@ -88,13 +88,6 @@ function App() {
 
     window.addEventListener('remote-channel-open', handleRemoteOpen);
 
-    // Listen for mirroring events from Rust (Tauri Client side)
-    const unlistenOpen = listen<[string, string]>('remote-channel-open', (event) => {
-      const [fromId, label] = event.payload;
-      // Synthesize the same object structure as the CustomEvent for reuse
-      handleRemoteOpen({ detail: { channel: { label }, fromId } });
-    });
-
     // Listen for mirroring events from Rust (Host side explicitly created tabs)
     const unlistenCreated = listen<any>('remote-tab-created', (event) => {
       const [tabId, peerId, portName] = event.payload;
@@ -113,7 +106,6 @@ function App() {
 
     return () => {
       window.removeEventListener('remote-channel-open', handleRemoteOpen);
-      unlistenOpen.then(u => u());
       unlistenCreated.then(u => u());
     };
   }, []);
@@ -265,8 +257,19 @@ function App() {
               Ignore
             </button>
             <button
-              onClick={incomingCall.accept}
-              className="bg-white text-blue-600 px-4 py-1 rounded shadow-md text-[10px] font-bold uppercase"
+              onClick={async () => {
+                const callerId = incomingCall.fromId;
+                await incomingCall.accept();
+                // Auto-share the currently active tab with this caller (AnyDesk Style)
+                if (activeTabId && !activeTabId.startsWith('remote-')) {
+                   // Dispatch an event to the active Workspace to perform the share + sync
+                   window.dispatchEvent(new CustomEvent('trigger-tab-share', { 
+                     detail: { tabId: activeTabId, peerId: callerId } 
+                   }));
+                   console.log(`[Auto-Share] Triggered share for ${activeTabId} to ${callerId}`);
+                }
+              }}
+              className="bg-white text-blue-600 px-4 py-1 rounded shadow-md text-[10px] font-bold uppercase transition-transform active:scale-95"
             >
               Accept
             </button>

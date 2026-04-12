@@ -1,6 +1,6 @@
 use crate::ActiveReaction;
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex};
@@ -223,7 +223,6 @@ impl TcpManager {
         let is_reading = tab.is_reading.clone();
         let reactions = tab.reactions.clone();
         let stream_clone = tab.stream.clone();
-        let log_file = tab.log_file.clone();
         let log_file = tab.log_file.clone();
         let log_format = tab.log_format.clone();
         let rolling_buffer = tab.rolling_buffer.clone();

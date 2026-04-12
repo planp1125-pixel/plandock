@@ -350,6 +350,13 @@ impl SerialManager {
                                 (tab_id.clone(), data.clone(), ts as u64, "RX"),
                             );
 
+                            // BROADCAST TO WEBRTC PEERS (Mirroring)
+                            let label = if tab_id == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id) };
+                            let data_to_broadcast = data.clone();
+                            tauri::async_runtime::block_on(async move {
+                                crate::share_manager::broadcast_remote_data(label, data_to_broadcast).await;
+                            });
+
                             crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
 
                             let mut rb_lock = rolling_buffer.lock().unwrap();
@@ -410,7 +417,12 @@ impl SerialManager {
                             }
                         }
                     }
-                    None => break,
+                    None => {
+                        let mut r_lock = is_reading.lock().unwrap();
+                        *r_lock = false;
+                        eprintln!("Serial read error or disconnected on tab {}", tab_id);
+                        break;
+                    }
                 }
 
                 if should_sleep {

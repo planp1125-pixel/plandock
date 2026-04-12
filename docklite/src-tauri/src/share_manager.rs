@@ -24,7 +24,7 @@ use crate::ssh_manager::SshManager;
 use std::fs;
 use uuid::Uuid;
 use webrtc::data_channel::data_channel_state::RTCDataChannelState;
-use crate::ActiveReaction;
+// use crate::ActiveReaction;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -55,6 +55,8 @@ pub static SHARE_MANAGER: Lazy<ShareManager> = Lazy::new(|| ShareManager {
 });
 
 pub static SIGNAL_SENDER: Lazy<Arc<Mutex<Option<tokio::sync::mpsc::Sender<Message>>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
+
+static PENDING_CANDIDATES: Lazy<DashMap<String, Vec<String>>> = Lazy::new(|| DashMap::new());
 
 pub struct ManagerContext {
     pub serial: Arc<SerialManager>,
@@ -139,6 +141,23 @@ pub async fn share_active_tab(tab_id: String, peer_id: String) -> Result<(), Str
     Err(format!("Peer {} not found in manager. Active: {:?}", peer_id, SHARE_MANAGER.peers.iter().map(|kv| kv.key().clone()).collect::<Vec<String>>()))
 }
 
+/// Broadcast binary data to all active DataChannels
+pub async fn broadcast_remote_data(label: String, data: Vec<u8>) {
+    // [0x01 = Serial Data, 0x00 = RX direction, ...bytes]
+    // Web app's onmessage handler expects: [type, dir_byte, ...bytes]
+    let mut payload = vec![0x01, 0x00];
+    payload.extend_from_slice(&data);
+
+    for kv in SHARE_MANAGER.peers.iter() {
+        let peer = kv.value();
+        for ch in &peer.channels {
+            if ch.label() == label && ch.ready_state() == RTCDataChannelState::Open {
+                let _ = ch.send(&payload.clone().into()).await;
+            }
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn send_remote_data(peer_id: String, label: String, data: Vec<u8>) -> Result<(), String> {
     if let Some(peer) = SHARE_MANAGER.peers.get(&peer_id) {
@@ -184,43 +203,51 @@ fn get_machine_id(app: &AppHandle) -> String {
     new_id
 }
 
-pub async fn start_sharing(
-    app: AppHandle,
-    serial: Arc<SerialManager>,
-    tcp: Arc<TcpManager>,
-    ssh: Arc<SshManager>,
-    name: String, 
-    signal_url: String
-) -> Result<String, String> {
-    let mut running = SHARE_MANAGER.is_running.lock().await;
-    if *running {
-        return Err("Already sharing".to_string());
-    }
-    *running = true;
+pub fn get_machine_id_pub(app: &AppHandle) -> String {
+    get_machine_id(app)
+}
 
-    *MANAGER_CONTEXT.lock().await = Some(ManagerContext {
-        serial,
-        tcp,
-        ssh,
-        app: app.clone(),
-    });
+/// Read the persisted device ID from disk (survives restarts).
+fn load_device_id(app: &AppHandle) -> Option<String> {
+    let path = app.path().app_data_dir().ok()?.join("device_id");
+    let raw = fs::read_to_string(&path).ok()?;
+    let id = raw.trim().to_string();
+    if id.is_empty() { None } else { Some(id) }
+}
+
+/// Persist the device ID to disk so it is restored on next start.
+fn save_device_id(app: &AppHandle, id: &str) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(dir.join("device_id"), id);
+    }
+}
+
+pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: String) -> Result<String, String> {
+    // Check if already active
+    if let Some(id) = SHARE_MANAGER.display_id.lock().await.as_ref() {
+        return Ok(id.clone());
+    }
 
     let machine_id = get_machine_id(&app);
 
-    // 1. Claim ID via HTTP
+    // Always claim the ID from the server using machine_id.
+    // The server keeps machine_id → device_id mapping, so the same machine always
+    // gets the same ID (402-249-134 style). Disk-caching caused stale IDs to persist.
     let base_url = signal_url.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
     let client = reqwest::Client::new();
     let resp = client.post(format!("{}/claim-id", base_url))
         .json(&serde_json::json!({ "name": name, "os": "Linux", "machine_id": machine_id }))
         .send().await.map_err(|e| e.to_string())?;
-    
     let claim_resp: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     let device_id = claim_resp["device_id"].as_str().ok_or("No device_id in response")?.to_string();
-    println!("[SIGNAL] Claimed/Restored Device ID: {}", device_id);
+    println!("[SIGNAL] Device ID from server (machine_id={}): {}", machine_id, device_id);
+
     *SHARE_MANAGER.display_id.lock().await = Some(device_id.clone());
 
     // 2. Connect WebSocket
     println!("[SIGNAL] Connecting to WebSocket: {}...", signal_url);
+    let signal_url_reconnect = signal_url.clone(); // keep for auto-reconnect
     let (mut ws_stream, _) = connect_async(signal_url).await.map_err(|e| e.to_string())?;
     println!("[SIGNAL] WebSocket Connected!");
 
@@ -231,26 +258,41 @@ pub async fn start_sharing(
     let hb = SignalMessage::Heartbeat { device_id: device_id.clone() };
     ws_stream.send(Message::Text(serde_json::to_string(&hb).unwrap().into())).await.map_err(|e| e.to_string())?;
 
-    let device_id_c = device_id.clone();
+    let app_c = app.clone();
+    let device_id_hb = device_id.clone();
     tokio::spawn(async move {
-        loop {
-            // Check if we should still be running
-            if !*SHARE_MANAGER.is_running.lock().await {
-                break;
-            }
+        // Periodic heartbeat — keeps this device visible on the signal server.
+        // Without this the server expires the session and callers get "Device not found".
+        let mut heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(20));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Skip the first immediate tick so we don't double-send (we already sent one above)
+        heartbeat.tick().await;
 
+        loop {
             tokio::select! {
+                _ = heartbeat.tick() => {
+                    let hb = SignalMessage::Heartbeat { device_id: device_id_hb.clone() };
+                    let msg = Message::Text(serde_json::to_string(&hb).unwrap().into());
+                    if let Err(e) = ws_stream.send(msg).await {
+                        println!("[SIGNAL] Heartbeat failed, connection lost: {}", e);
+                        break;
+                    }
+                    println!("[SIGNAL] Heartbeat sent for {}", device_id_hb);
+                }
                 Some(Ok(msg)) = ws_stream.next() => {
                     if let Message::Text(text) = msg {
+                        println!("[SIGNAL] Raw WS Message: {}", text);
                         if let Ok(signal) = serde_json::from_str::<serde_json::Value>(&text.to_string()) {
                             let msg_type = signal["type"].as_str().unwrap_or("");
+                            let from = signal["from_id"].as_str().unwrap_or("").to_string();
+                            let sdp = signal["sdp"].as_str().unwrap_or("").to_string();
+
                             match msg_type {
                                 "offer" => {
-                                    let from = signal["from_id"].as_str().unwrap_or("").to_string();
-                                    let sdp = signal["sdp"].as_str().unwrap_or("").to_string();
                                     if !from.is_empty() {
                                         println!("[SIGNAL] Received Offer from: {}", from);
-                                        handle_offer(device_id_c.clone(), from, sdp).await;
+                                        let payload = vec![from, sdp];
+                                        let _ = app_c.emit("remote-offer", payload);
                                     }
                                 }
                                 "answer" => {
@@ -273,22 +315,138 @@ pub async fn start_sharing(
                     }
                 }
                 Some(out_msg) = rx.recv() => {
-                    let _ = ws_stream.send(out_msg).await;
+                    if let Err(e) = ws_stream.send(out_msg).await {
+                        println!("[SIGNAL] Error sending to WS: {}", e);
+                        break;
+                    }
                 }
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(500)) => {
-                    // Just a small sleep to avoid tight loop if selectivity is weird, 
-                    // though select! handles it.
+                else => break,
+            }
+        }
+        println!("[SIGNAL] WS loop exited — clearing state.");
+        *SHARE_MANAGER.display_id.lock().await = None;
+        SHARE_MANAGER.peers.clear();
+        *SIGNAL_SENDER.lock().await = None;
+
+        // Auto-reconnect: keep trying until `is_running` is explicitly set to false
+        let mut retry_secs = 5u64;
+        loop {
+            if !*SHARE_MANAGER.is_running.lock().await {
+                println!("[SIGNAL] Sharing stopped — not reconnecting.");
+                break;
+            }
+            println!("[SIGNAL] Reconnecting in {}s...", retry_secs);
+            tokio::time::sleep(tokio::time::Duration::from_secs(retry_secs)).await;
+
+            match connect_async(&signal_url_reconnect).await {
+                Ok((new_ws, _)) => {
+                    let (new_tx, new_rx) = tokio::sync::mpsc::channel::<Message>(100);
+                    *SIGNAL_SENDER.lock().await = Some(new_tx);
+                    *SHARE_MANAGER.display_id.lock().await = Some(device_id_hb.clone());
+
+                    // Re-register with server
+                    let mut ws = new_ws;
+                    let hb = SignalMessage::Heartbeat { device_id: device_id_hb.clone() };
+                    let _ = ws.send(Message::Text(serde_json::to_string(&hb).unwrap().into())).await;
+                    let _ = app_c.emit("remote-id-ready", device_id_hb.clone());
+
+                    println!("[SIGNAL] Reconnected as {}", device_id_hb);
+                    rx = new_rx;
+                    ws_stream = ws;
+                    retry_secs = 5;
+
+                    // Resume the heartbeat + message loop
+                    let mut heartbeat2 = tokio::time::interval(tokio::time::Duration::from_secs(20));
+                    heartbeat2.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    heartbeat2.tick().await;
+
+                    loop {
+                        tokio::select! {
+                            _ = heartbeat2.tick() => {
+                                let hb2 = SignalMessage::Heartbeat { device_id: device_id_hb.clone() };
+                                let msg2 = Message::Text(serde_json::to_string(&hb2).unwrap().into());
+                                if let Err(e) = ws_stream.send(msg2).await {
+                                    println!("[SIGNAL] Heartbeat failed after reconnect: {}", e);
+                                    *SHARE_MANAGER.display_id.lock().await = None;
+                                    SHARE_MANAGER.peers.clear();
+                                    *SIGNAL_SENDER.lock().await = None;
+                                    break;
+                                }
+                                println!("[SIGNAL] Heartbeat sent for {} (reconnected)", device_id_hb);
+                            }
+                            Some(Ok(msg2)) = ws_stream.next() => {
+                                if let Message::Text(text) = msg2 {
+                                    if let Ok(signal) = serde_json::from_str::<serde_json::Value>(&text.to_string()) {
+                                        let msg_type = signal["type"].as_str().unwrap_or("");
+                                        let from = signal["from_id"].as_str().unwrap_or("").to_string();
+                                        let sdp = signal["sdp"].as_str().unwrap_or("").to_string();
+                                        match msg_type {
+                                            "offer" => {
+                                                if !from.is_empty() {
+                                                    let _ = app_c.emit("remote-offer", vec![from, sdp]);
+                                                }
+                                            }
+                                            "answer" => {
+                                                if !from.is_empty() { handle_answer(from, sdp).await; }
+                                            }
+                                            "ice_candidate" => {
+                                                let candidate = signal["candidate"].as_str().unwrap_or("").to_string();
+                                                if !from.is_empty() { handle_ice_candidate(from, candidate).await; }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                            }
+                            Some(out_msg) = rx.recv() => {
+                                if let Err(e) = ws_stream.send(out_msg).await {
+                                    println!("[SIGNAL] Send error after reconnect: {}", e);
+                                    *SHARE_MANAGER.display_id.lock().await = None;
+                                    SHARE_MANAGER.peers.clear();
+                                    *SIGNAL_SENDER.lock().await = None;
+                                    break;
+                                }
+                            }
+                            else => break,
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("[SIGNAL] Reconnect failed: {} — will retry in {}s", e, retry_secs * 2);
+                    retry_secs = (retry_secs * 2).min(60);
                 }
             }
         }
-        println!("[SIGNAL] Sharing task stopped.");
-        *SHARE_MANAGER.display_id.lock().await = None;
+
         *SHARE_MANAGER.is_running.lock().await = false;
-        SHARE_MANAGER.peers.clear();
-        *SIGNAL_SENDER.lock().await = None;
+        println!("[SIGNAL] Sharing task fully stopped.");
     });
 
-    Ok("Starting".to_string())
+    Ok(device_id)
+}
+
+pub async fn start_sharing(
+    app: AppHandle,
+    serial: Arc<SerialManager>,
+    tcp: Arc<TcpManager>,
+    ssh: Arc<SshManager>,
+    name: String, 
+    signal_url: String
+) -> Result<String, String> {
+    let mut running = SHARE_MANAGER.is_running.lock().await;
+    if *running {
+        return Err("Already sharing".to_string());
+    }
+    *running = true;
+
+    *MANAGER_CONTEXT.lock().await = Some(ManagerContext {
+        serial,
+        tcp,
+        ssh,
+        app: app.clone(),
+    });
+
+    ensure_signaling_active(app, name, signal_url).await
 }
 
 pub async fn stop_sharing() -> Result<(), String> {
@@ -380,8 +538,8 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>) {
         peer.channels.push(Arc::clone(&d));
     }
 
-    // Auto-map labeled channels for terminal data routing (Client side)
-    if label.starts_with("serial-") || label.starts_with("ssh-") || label.starts_with("remote-") {
+    // Auto-map labeled channels for terminal data routing
+    if (label.starts_with("serial-") || label.starts_with("ssh-") || label.starts_with("remote-")) && label != "serial-bridge" {
         println!("[WEBRTC] Mapping data channel {} to self", label);
         DC_TAB_MAP.insert(label.clone(), label.clone());
 
@@ -389,6 +547,11 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>) {
         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
             let _ = ctx.app.emit("remote-channel-open", (peer_id.clone(), label.clone()));
         }
+    } else if label == "serial-bridge" {
+        // HOST-SIDE: Map the generic mirror channel to the 'main' tab by default
+        // This allows commands from the Web client to hit the real serial port.
+        println!("[WEBRTC] Mapping generic bridge '{}' to 'main' tab on HOST", label);
+        DC_TAB_MAP.insert("serial-bridge".to_string(), "main".to_string());
     }
 
     let d_c = Arc::clone(&d);
@@ -403,12 +566,16 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>) {
             match msg_type {
                 0x01 => { // Serial Data from remote
                     let label = d_inner.label();
+                    println!("[WEBRTC] Incoming remote data on channel '{}'", label);
+                    
                     if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
                         let tab_id_str: &String = tab_id.value();
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
-                            println!("[WEBRTC] Writing remote {} bytes to tab {}", payload.len(), tab_id_str);
+                            println!("[WEBRTC] Routing data to tab {}", tab_id_str);
                             let _ = ctx.serial.write_data(&ctx.app, tab_id_str, payload.to_vec(), "TX_REMOTE");
                         }
+                    } else {
+                        println!("[WEBRTC] WARNING: No tab mapped for channel '{}'. DC_TAB_MAP dump: {:?}", label, DC_TAB_MAP.iter().map(|kv| kv.key().clone()).collect::<Vec<_>>());
                     }
                 }
                 0x02 => { // Control
@@ -536,8 +703,8 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
     }
 }
 
-pub async fn connect_remote(tab_id: String, device_id: String) -> Result<(), String> {
-    let my_id = SHARE_MANAGER.display_id.lock().await.clone().unwrap_or_else(|| "unknown".to_string());
+pub async fn connect_remote(app: AppHandle, tab_id: String, device_id: String) -> Result<(), String> {
+    let my_id = ensure_signaling_active(app, "unknown".to_string(), "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string()).await?;
     let api = create_webrtc_api();
     let config = create_webrtc_config();
     let pc = Arc::new(api.new_peer_connection(config).await.unwrap());
@@ -561,7 +728,8 @@ pub async fn connect_remote(tab_id: String, device_id: String) -> Result<(), Str
         })
     }));
 
-    let dc = pc.create_data_channel(&format!("remote-{}", tab_id), None).await.unwrap();
+    // Always use "serial-bridge" so broadcast_remote_data can find this channel
+    let dc = pc.create_data_channel("serial-bridge", None).await.unwrap();
     setup_data_channel(device_id.clone(), dc).await;
 
     let offer = pc.create_offer(None).await.unwrap();
@@ -613,8 +781,20 @@ pub async fn get_display_id() -> Option<String> {
     SHARE_MANAGER.display_id.lock().await.clone()
 }
 
-// --- NEW SUPABASE BRIDGE COMMANDS ---
+// --- NEW UNIFIED SIGNALING COMMANDS ---
 
+#[tauri::command]
+pub async fn accept_remote_offer(from_id: String, sdp: String) -> Result<String, String> {
+    let my_id = {
+        let id_lock = SHARE_MANAGER.display_id.lock().await;
+        id_lock.clone().ok_or("Signaling not started")?
+    };
+    handle_offer(my_id, from_id, sdp).await;
+    // Note: handle_offer generates and sends the Answer sdp internally via WebSocket
+    Ok("Answer sent".to_string())
+}
+
+#[tauri::command]
 pub async fn handle_supabase_offer(app: AppHandle, to_id: String, from_id: String, offer_sdp: String) -> Result<String, String> {
     println!("[WEBRTC-RUST] STEP 1: Incoming offer from {}", from_id);
     
@@ -703,10 +883,21 @@ pub async fn handle_supabase_offer(app: AppHandle, to_id: String, from_id: Strin
     // 5. Store Peer
     let id_key = from_id.trim().to_string();
     SHARE_MANAGER.peers.insert(id_key.clone(), PeerState { 
-        pc: pc_c,
+        pc: pc_c.clone(),
         channels: Vec::new()
     });
     println!("[WEBRTC-RUST] SUCCESS: Peer ID {:?} INSTALLED in Manager. Total peers: {}", id_key, SHARE_MANAGER.peers.len());
+    
+    if let Some((_, candidates)) = PENDING_CANDIDATES.remove(&id_key) {
+        println!("[WEBRTC-RUST] Applying {} pending ICE candidates for {:?}", candidates.len(), id_key);
+        for cand in candidates {
+            if let Ok(init) = serde_json::from_str::<RTCIceCandidateInit>(&cand) {
+                let _ = pc_c.add_ice_candidate(init).await;
+            } else {
+                let _ = pc_c.add_ice_candidate(RTCIceCandidateInit { candidate: cand, ..Default::default() }).await;
+            }
+        }
+    }
     
     Ok(answer.sdp)
 }
@@ -723,6 +914,8 @@ pub async fn handle_supabase_candidate(from_id: String, candidate_json: String) 
                 ..Default::default()
             }).await.map_err(|e| e.to_string())?;
         }
+    } else {
+        PENDING_CANDIDATES.entry(from_id.to_string()).or_default().push(candidate_json);
     }
     Ok(())
 }

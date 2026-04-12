@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { safeInvoke } from '../utils/tauri';
 
 export interface LicenseStatus {
     is_pro: boolean;
@@ -46,8 +46,8 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
 
     const refresh = async () => {
         try {
-            const result = await invoke<LicenseStatus>('get_license_status');
-            setStatus(result);
+            const result = await safeInvoke<LicenseStatus>('get_license_status');
+            if (result) setStatus(result);
         } catch (e) {
             console.error('Failed to get license status:', e);
         } finally {
@@ -61,7 +61,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
 
     const activate = async (key: string): Promise<{ success: boolean; error?: string }> => {
         try {
-            await invoke('activate_license', { key });
+            await safeInvoke('activate_license', { key });
             await refresh();
             return { success: true };
         } catch (e: any) {
@@ -71,7 +71,7 @@ export function LicenseProvider({ children }: { children: ReactNode }) {
 
     const deactivate = async () => {
         try {
-            await invoke('deactivate_license');
+            await safeInvoke('deactivate_license');
             await refresh();
         } catch (e) {
             console.error('Failed to deactivate license:', e);

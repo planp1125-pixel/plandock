@@ -5,7 +5,7 @@ ref_docklight_formats/
 plan-signal/
 
 # Node modules
-node_modules/
+node_modules/upload this into github with dev-pending notes, before that i want to disable "ref_docklight_formats" from github, it should not upload to github what to do? if its already uploaded i wnat to remove that
 
 # Build outputs
 dist/
