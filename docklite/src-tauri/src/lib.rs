@@ -5,6 +5,7 @@ mod serial_manager;
 mod ssh_manager;
 mod log_utils;
 mod share_manager;
+mod template;
 
 use license::{LicenseManager, LicenseStatus};
 use project_manager::{load_project, save_project, import_ptp_file, Project};
@@ -24,9 +25,15 @@ static PLAYBACK_CONTROLS: std::sync::LazyLock<Mutex<HashMap<String, (Arc<AtomicB
 
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ReactionAction {
+    pub response_data: Vec<u8>,
+    pub delay_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ActiveReaction {
     pub trigger_data: Vec<u8>,
-    pub response_data: Vec<u8>,
+    pub actions: Vec<ReactionAction>,
 }
 
 #[tauri::command]
@@ -71,7 +78,8 @@ fn close_serial_port(state: State<'_, Arc<SerialManager>>, tab_id: String) {
 async fn send_serial_data(app: AppHandle, state: State<'_, Arc<SerialManager>>, tab_id: String, data: Vec<u8>) -> Result<(), String> {
     let manager = state.inner().clone();
     std::thread::spawn(move || {
-        let _ = manager.write_data(&app, &tab_id, data, "TX");
+        let final_data = crate::template::evaluate_dynamic_tags(&data);
+        let _ = manager.write_data(&app, &tab_id, final_data, "TX");
     });
     Ok(()) 
 }
@@ -273,7 +281,8 @@ fn disconnect_tcp(tcp_manager: State<'_, Arc<TcpManager>>, tab_id: String) {
 
 #[tauri::command]
 fn send_tcp_data(tcp_manager: State<'_, Arc<TcpManager>>, tab_id: String, data: Vec<u8>) -> Result<(), String> {
-    tcp_manager.write_data(&tab_id, data)
+    let final_data = crate::template::evaluate_dynamic_tags(&data);
+    tcp_manager.write_data(&tab_id, final_data)
 }
 
 #[tauri::command]
@@ -308,13 +317,16 @@ fn disconnect_ssh(ssh_manager: State<'_, Arc<SshManager>>, tab_id: String) {
     ssh_manager.disconnect(&tab_id);
 }
 
+
+
 #[tauri::command]
 fn send_ssh_data(
     ssh_manager: State<'_, Arc<SshManager>>,
     tab_id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
-    ssh_manager.write_data(&tab_id, data)
+    let final_data = crate::template::evaluate_dynamic_tags(&data);
+    ssh_manager.write_data(&tab_id, final_data)
 }
 
 #[tauri::command]
@@ -441,7 +453,8 @@ async fn start_remote_sharing(
     ssh: State<'_, Arc<SshManager>>,
     name: String
 ) -> Result<String, String> {
-    let signal_url = "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string();
+    // let signal_url = "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string(); // GCP Server
+    let signal_url = "wss://plan-signal.onrender.com/ws".to_string();
     share_manager::start_sharing(
         app,
         serial.inner().clone(),
@@ -472,15 +485,6 @@ async fn connect_remote(app: AppHandle, tab_id: String, device_id: String) -> Re
     share_manager::connect_remote(app, tab_id, device_id).await
 }
 
-#[tauri::command]
-async fn process_supabase_offer(app: AppHandle, to_id: String, from_id: String, sdp: String) -> Result<String, String> {
-    share_manager::handle_supabase_offer(app, to_id, from_id, sdp).await
-}
-
-#[tauri::command]
-async fn process_supabase_candidate(from_id: String, candidate: String) -> Result<(), String> {
-    share_manager::handle_supabase_candidate(from_id, candidate).await
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -508,18 +512,22 @@ pub fn run() {
                 match share_manager::ensure_signaling_active(
                     app_handle.clone(),
                     "unknown".to_string(),
-                    "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string()
+                    // "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string() // GCP Server
+                    "wss://plan-signal.onrender.com/ws".to_string()
                 ).await {
-                    Ok(device_id) => {
+                    Ok(_device_id) => {
+                        // Mark signaling as running so the WS reconnect loop stays active
+                        // after disconnections, without requiring the user to toggle sharing.
+                        *share_manager::SHARE_MANAGER.is_running.lock().await = true;
+
                         // Set MANAGER_CONTEXT so data routing works even before user clicks "Share"
                         *share_manager::MANAGER_CONTEXT.lock().await = Some(share_manager::ManagerContext {
                             serial,
-                            tcp,
+                            _tcp: tcp,
                             ssh,
                             app: app_handle.clone(),
                         });
-                        // Tell the frontend which ID Rust claimed — fixes the ID mismatch
-                        let _ = app_handle.emit("remote-id-ready", device_id);
+                        // remote-id-ready is already emitted inside ensure_signaling_active
                     }
                     Err(e) => eprintln!("[SIGNAL] Auto-init failed: {}", e),
                 }
@@ -566,8 +574,6 @@ pub fn run() {
             get_remote_device_id,
             get_machine_id,
             connect_remote,
-            process_supabase_offer,
-            process_supabase_candidate,
             share_manager::accept_remote_offer,
             share_manager::share_active_tab,
             share_manager::send_remote_data

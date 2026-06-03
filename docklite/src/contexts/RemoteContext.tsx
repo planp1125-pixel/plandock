@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { supabase } from '../utils/supabase';
 import { RemoteSignaling } from '../utils/remote_signaling';
-import { safeInvoke, safeListen } from '../utils/tauri';
+import { safeInvoke, safeListen, isTauri } from '../utils/tauri';
 
 interface IncomingCall {
     fromId: string;
@@ -113,39 +113,43 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             // Web mode — machine_id not available from Rust
         }
 
-        // In Tauri mode, Rust auto-init will emit 'remote-id-ready' with the correct ID.
-        // We still try to get the current ID synchronously in case it was already claimed.
+        // In Tauri mode: only use the ID that Rust has confirmed is registered on the signal
+        // server. Never fall back to a stale localStorage value — that would cause Supabase
+        // to be upserted with an ID nobody is listening for, making the device unreachable.
+        // The 'remote-id-ready' event will set the correct ID once auto-init completes.
         let dId: string | null = null;
-        try {
-            const rId = await safeInvoke<string | null>('get_remote_device_id');
-            if (rId) {
-                dId = rId;
-                console.log("[RemoteContext] Got ID from Rust (already claimed):", dId);
-            }
-        } catch (e) { /* not yet claimed */ }
-
-        // Web mode fallback: use localStorage or claim from server
-        if (!dId) {
-            dId = localStorage.getItem('remote-device-id');
-        }
-        if (!dId) {
+        if (isTauri()) {
             try {
-                const mId = localStorage.getItem('remote-machine-id') || "browser-" + Math.random().toString(36).substring(7);
-                const resp = await fetch("https://plan-signal-29066723448.asia-south1.run.app/claim-id", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name: savedName, os: "Web", machine_id: mId })
-                });
-                const data = await resp.json();
-                dId = data.device_id;
-                if (dId) localStorage.setItem('remote-device-id', dId);
-            } catch (e) {
-                console.error("[RemoteContext] Failed to claim ID from server", e);
-                const segment = () => Math.floor(100 + Math.random() * 900).toString();
-                dId = `${segment()}-${segment()}-${segment()}`;
+                const rId = await safeInvoke<string | null>('get_remote_device_id');
+                if (rId) {
+                    dId = rId;
+                    console.log("[RemoteContext] Got confirmed signal-server ID from Rust:", dId);
+                } else {
+                    console.log("[RemoteContext] Tauri auto-init still running — waiting for remote-id-ready");
+                }
+            } catch (e) { /* auto-init not yet complete */ }
+        } else {
+            // Web mode: use localStorage cache or claim from signal server
+            dId = localStorage.getItem('remote-device-id');
+            if (!dId) {
+                try {
+                    const mId = localStorage.getItem('remote-machine-id') || "browser-" + Math.random().toString(36).substring(7);
+                    const resp = await fetch("https://plan-signal.onrender.com/claim-id", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name: savedName, os: "Web", machine_id: mId })
+                    });
+                    const data = await resp.json();
+                    dId = data.device_id;
+                    if (dId) localStorage.setItem('remote-device-id', dId);
+                } catch (e) {
+                    console.error("[RemoteContext] Failed to claim ID from server", e);
+                    const segment = () => Math.floor(100 + Math.random() * 900).toString();
+                    dId = `${segment()}-${segment()}-${segment()}`;
+                }
             }
         }
-        setDeviceId(dId);
+        if (dId) setDeviceId(dId);
 
         const sharing = localStorage.getItem('remote-sharing-active') === 'true';
         if (sharing) setIsSharing(true);
@@ -200,7 +204,8 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 id: deviceId,
                 machine_id: mId,
                 name: deviceName,
-                status: isSharing ? 'online' : 'available',
+                // Web app is always online (no sharing toggle). Tauri app uses isSharing flag.
+                status: (!isTauri() || isSharing) ? 'online' : 'available',
                 last_seen: new Date().toISOString()
             });
         };

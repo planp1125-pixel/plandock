@@ -24,7 +24,7 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
             const { data } = await supabase
                 .from('remote_devices')
                 .select('*')
-                .eq('status', 'online')
+                .in('status', ['online', 'available'])
                 .neq('id', deviceId)
                 .limit(10);
             if (data) setOnlineDevices(data);
@@ -46,7 +46,7 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
                 .single();
 
             if (error) throw new Error("Device not found");
-            if (data.status !== 'online') {
+            if (data.status === 'offline') {
                 alert(`Device ${remoteId} is currently OFFLINE.`);
             } else {
                 if (!deviceId) return alert("Generate your ID first!");

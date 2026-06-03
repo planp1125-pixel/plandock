@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { Reaction, Sequence } from "../types";
-import { X, Save, ChevronDown } from "lucide-react";
+import { Reaction, Sequence, ReactionAction } from "../types";
+import { X, Save, ChevronDown, Trash2 } from "lucide-react";
 import { parseData, bytesToHex, bytesToBin } from "../utils";
 
 
@@ -10,12 +10,17 @@ interface Props {
     isOpen: boolean;
     onClose: () => void;
     onSave: (r: Reaction) => void;
+    onDelete?: (r: Reaction) => void;
 }
 
-export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }: Props) {
+export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave, onDelete }: Props) {
     const [name, setName] = useState(reaction.name);
     const [triggerData, setTriggerData] = useState(reaction.trigger_data);
-    const [responseId, setResponseId] = useState(reaction.response_sequence_id);
+    const [actions, setActions] = useState<ReactionAction[]>(() => {
+        if (reaction.actions && reaction.actions.length > 0) return [...reaction.actions];
+        if (reaction.response_sequence_id) return [{ sequence_id: reaction.response_sequence_id, delay_ms: 0 }];
+        return [];
+    });
     const [enabled, setEnabled] = useState(reaction.enabled);
     const [viewMode, setViewMode] = useState<"Ascii" | "Hex" | "Decimal" | "Binary">("Ascii");
     const [previewMode, setPreviewMode] = useState<'Hex' | 'Decimal'>('Hex');
@@ -40,7 +45,13 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
 
     useEffect(() => {
         setName(reaction.name);
-        setResponseId(reaction.response_sequence_id);
+        if (reaction.actions && reaction.actions.length > 0) {
+            setActions([...reaction.actions]);
+        } else if (reaction.response_sequence_id) {
+            setActions([{ sequence_id: reaction.response_sequence_id, delay_ms: 0 }]);
+        } else {
+            setActions([]);
+        }
         setEnabled(reaction.enabled);
 
         // Handle Data Conversion on Load
@@ -336,38 +347,91 @@ export function ReactionEditor({ reaction, sequences, isOpen, onClose, onSave }:
                     </div>
 
                     <div>
-                        <label className="text-sm font-medium">Auto-Response Sequence</label>
-                        <div className="relative">
-                            <select
-                                className="w-full rounded px-3 py-2 mt-1 appearance-none pr-8 cursor-pointer outline-none"
-                                style={{
-                                    backgroundColor: 'hsl(var(--background))',
-                                    borderColor: 'hsl(var(--border))',
-                                    color: 'hsl(var(--foreground))',
-                                    borderWidth: '1px',
-                                    colorScheme: 'light dark'
-                                }}
-                                value={responseId}
-                                onChange={e => setResponseId(e.target.value)}
-                            >
-                                <option value="">(No Response)</option>
-                                {sequences.map(s => (
-                                    <option key={s.id} value={s.id}>{s.name} ({s.data ? s.data.substring(0, 10) + '...' : 'empty'})</option>
-                                ))}
-                            </select>
-                            <ChevronDown className="absolute right-3 top-[60%] -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
+                        <div className="flex justify-between items-center mb-2">
+                            <label className="text-sm font-medium">Auto-Response Actions</label>
+                            <button 
+                                onClick={() => setActions([...actions, { sequence_id: sequences[0]?.id || '', delay_ms: 0 }])}
+                                className="px-2 py-1 text-xs bg-secondary text-secondary-foreground rounded hover:bg-secondary/80"
+                            >+ Add Response</button>
+                        </div>
+                        
+                        <div className="space-y-2 max-h-[25vh] overflow-y-auto pr-2">
+                            {actions.length === 0 && <div className="text-sm text-muted-foreground p-3 border border-dashed rounded text-center">No auto-responses. Add one to send replies when triggered.</div>}
+                            {actions.map((action, idx) => (
+                                <div key={idx} className="flex gap-2 items-center bg-muted/30 p-2 rounded border">
+                                    <div className="text-xs font-mono w-6 text-center text-muted-foreground">{idx + 1}</div>
+                                    <div className="flex-1 relative">
+                                        <select
+                                            className="w-full rounded px-2 py-1 text-sm border bg-background appearance-none pr-6"
+                                            value={action.sequence_id}
+                                            onChange={e => {
+                                                const newActions = [...actions];
+                                                newActions[idx].sequence_id = e.target.value;
+                                                setActions(newActions);
+                                            }}
+                                        >
+                                            <option value="">(Select Sequence)</option>
+                                            {sequences.map(s => (
+                                                <option key={s.id} value={s.id}>{s.name} ({s.data ? s.data.substring(0, 10) + '...' : 'empty'})</option>
+                                            ))}
+                                        </select>
+                                        <ChevronDown className="absolute right-2 top-[50%] -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" />
+                                    </div>
+                                    <div className="w-24">
+                                        <div className="relative">
+                                            <input
+                                                type="number"
+                                                className="w-full rounded px-2 py-1 text-sm border bg-background pr-6"
+                                                value={action.delay_ms}
+                                                onChange={e => {
+                                                    const newActions = [...actions];
+                                                    newActions[idx].delay_ms = parseInt(e.target.value) || 0;
+                                                    setActions(newActions);
+                                                }}
+                                                min="0"
+                                                title="Delay before sending this response (milliseconds)"
+                                            />
+                                            <span className="absolute right-2 top-[50%] -translate-y-1/2 text-xs text-muted-foreground pointer-events-none">ms</span>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            const newActions = [...actions];
+                                            newActions.splice(idx, 1);
+                                            setActions(newActions);
+                                        }}
+                                        className="p-1 hover:bg-red-500/20 text-red-500 rounded transition-colors"
+                                        title="Remove response"
+                                    >
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            ))}
                         </div>
                     </div>
                 </div>
 
-                <div className="flex justify-end gap-2 pt-2 border-t">
-                    <button onClick={onClose} className="px-4 py-2 border rounded hover:bg-accent text-sm">Cancel</button>
+                <div className="flex justify-between gap-2 pt-2 border-t">
+                    <div>
+                        {onDelete && (
+                            <button
+                                onClick={() => { onDelete(reaction); onClose(); }}
+                                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm flex items-center gap-2"
+                                title="Delete this rule"
+                            >
+                                <Trash2 className="w-4 h-4" /> Delete
+                            </button>
+                        )}
+                    </div>
+                    <div className="flex gap-2">
+                        <button onClick={onClose} className="px-4 py-2 border rounded hover:bg-accent text-sm">Cancel</button>
                     <button
-                        onClick={() => onSave({ ...reaction, name, trigger_data: triggerData, response_sequence_id: responseId, enabled, view_mode: viewMode })}
+                        onClick={() => onSave({ ...reaction, name, trigger_data: triggerData, actions, enabled, view_mode: viewMode })}
                         className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 text-sm flex items-center gap-2"
                     >
                         <Save className="w-4 h-4" /> Save Rule
                     </button>
+                    </div>
                 </div>
             </div>
         </div>

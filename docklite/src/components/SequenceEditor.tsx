@@ -11,9 +11,10 @@ interface Props {
     onSave: (seq: Sequence) => void;
     onDelete?: (seq: Sequence) => void;
     onSend?: (seq: Sequence) => void;
+    existingGroups?: string[];
 }
 
-export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, onSend }: Props) {
+export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, onSend, existingGroups = [] }: Props) {
     const [data, setData] = useState(sequence.data);
     const [name, setName] = useState(sequence.name);
     const [viewMode, setViewMode] = useState(sequence.view_mode);
@@ -23,6 +24,7 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
     // Periodic send
     const [periodicEnabled, setPeriodicEnabled] = useState(sequence.periodic_enabled || false);
     const [periodicInterval, setPeriodicInterval] = useState(sequence.periodic_interval || 1000);
+    const [group, setGroup] = useState(sequence.group || "");
     // CRC
     const [crcType, setCrcType] = useState<CrcType>('none');
 
@@ -48,6 +50,7 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
         setName(sequence.name);
         setPeriodicInterval(sequence.periodic_interval || 1000);
         setPeriodicEnabled(sequence.periodic_enabled || false);
+        setGroup(sequence.group || "");
 
         // Handle Data Conversion on Load
         let initialData = sequence.data;
@@ -166,13 +169,32 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
                 </div>
 
                 <div className="space-y-4">
-                    <div>
-                        <label className="text-sm font-medium">Name</label>
-                        <input
-                            className="w-full bg-background border rounded px-3 py-2 mt-1"
-                            value={name}
-                            onChange={e => setName(e.target.value)}
-                        />
+                    <div className="flex gap-4">
+                        <div className="flex-1">
+                            <label className="text-sm font-medium">Name</label>
+                            <input
+                                className="w-full bg-background border rounded px-3 py-2 mt-1"
+                                value={name}
+                                onChange={e => setName(e.target.value)}
+                            />
+                        </div>
+                        <div className="w-1/3">
+                            <label className="text-sm font-medium">Group (Optional)</label>
+                            <div className="relative mt-1">
+                                <input
+                                    list="group-options"
+                                    className="w-full bg-background border rounded px-3 py-2"
+                                    value={group}
+                                    onChange={e => setGroup(e.target.value)}
+                                    placeholder="e.g. Commands, Initialization..."
+                                />
+                                <datalist id="group-options">
+                                    {existingGroups.map(g => (
+                                        <option key={g} value={g} />
+                                    ))}
+                                </datalist>
+                            </div>
+                        </div>
                     </div>
 
                     {/* Side-by-side container */}
@@ -427,7 +449,7 @@ export function SequenceEditor({ sequence, isOpen, onClose, onSave, onDelete, on
                         )}
                         <button onClick={onClose} className="px-4 py-2 border rounded hover:bg-accent text-sm">Cancel</button>
                         <button
-                            onClick={() => onSave({ ...sequence, name, data, view_mode: viewMode, periodic_interval: periodicInterval, periodic_enabled: periodicEnabled })}
+                            onClick={() => onSave({ ...sequence, name, data, view_mode: viewMode, periodic_interval: periodicInterval, periodic_enabled: periodicEnabled, group: group || undefined })}
                             className="px-4 py-2 bg-primary text-primary-foreground rounded hover:bg-primary/90 text-sm flex items-center gap-2"
                         >
                             <Save className="w-4 h-4" /> Save

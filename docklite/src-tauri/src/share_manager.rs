@@ -5,7 +5,7 @@ use webrtc::peer_connection::RTCPeerConnection;
 use webrtc::data_channel::RTCDataChannel;
 use webrtc::api::APIBuilder;
 use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
+// use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::data_channel::data_channel_message::DataChannelMessage;
@@ -33,6 +33,7 @@ pub enum SignalMessage {
     Goodbye { device_id: String },
     Offer { from_id: String, to_id: String, sdp: String },
     Answer { from_id: String, to_id: String, sdp: String },
+    #[serde(rename = "candidate")]
     IceCandidate { from_id: String, to_id: String, candidate: String },
     Error { message: String },
 }
@@ -56,11 +57,13 @@ pub static SHARE_MANAGER: Lazy<ShareManager> = Lazy::new(|| ShareManager {
 
 pub static SIGNAL_SENDER: Lazy<Arc<Mutex<Option<tokio::sync::mpsc::Sender<Message>>>>> = Lazy::new(|| Arc::new(Mutex::new(None)));
 
-static PENDING_CANDIDATES: Lazy<DashMap<String, Vec<String>>> = Lazy::new(|| DashMap::new());
-
+/// ICE candidates that arrive before the peer's RTCPeerConnection is created (i.e. before
+/// accept_remote_offer completes). Keyed by from_id, drained inside handle_offer after the
+/// remote description is set.
+static PENDING_CANDIDATES: Lazy<DashMap<String, Vec<RTCIceCandidateInit>>> = Lazy::new(DashMap::new);
 pub struct ManagerContext {
     pub serial: Arc<SerialManager>,
-    pub tcp: Arc<TcpManager>,
+    pub _tcp: Arc<TcpManager>,
     pub ssh: Arc<SshManager>,
     pub app: AppHandle,
 }
@@ -100,7 +103,7 @@ pub async fn share_active_tab(tab_id: String, peer_id: String) -> Result<(), Str
                 // Fallback: create new channel if none exists
                 println!("[WEBRTC] No existing channel found, creating new one for tab {}", tab_id);
                 let new_dc = peer.pc.create_data_channel(&tab_id, None).await.map_err(|e| e.to_string())?;
-                setup_data_channel(peer_id.clone(), new_dc.clone()).await;
+                setup_data_channel(peer_id.clone(), new_dc.clone(), None).await;
                 new_dc
             };
 
@@ -223,25 +226,74 @@ fn save_device_id(app: &AppHandle, id: &str) {
     }
 }
 
+const SUPABASE_URL: &str = "https://xpxzssueokeomxopzdbr.supabase.co";
+const SUPABASE_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhweHpzc3Vlb2tlb214b3B6ZGJyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQ3MTA1MjUsImV4cCI6MjA5MDI4NjUyNX0.2kQAQJpXEqIduP0eVYn22JSRZMHauJ3mh8tnCS5Ftbc";
+
+/// Query Supabase for a previously registered device_id matching this machine_id.
+/// Returns None if the machine has no prior registration or the lookup fails.
+async fn lookup_supabase_device_id(machine_id: &str) -> Option<String> {
+    let url = format!(
+        "{}/rest/v1/remote_devices?machine_id=eq.{}&select=id&order=last_seen.desc&limit=1",
+        SUPABASE_URL, machine_id
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("apikey", SUPABASE_KEY)
+        .header("Authorization", format!("Bearer {}", SUPABASE_KEY))
+        .send()
+        .await
+        .ok()?;
+    if machine_id == "unknown" { return None; }
+    let rows: Vec<serde_json::Value> = resp.json().await.ok()?;
+    rows.into_iter().next()?.get("id")?.as_str().map(|s| s.to_string())
+}
+
 pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: String) -> Result<String, String> {
-    // Check if already active
+    // 1. Check if already active in memory
     if let Some(id) = SHARE_MANAGER.display_id.lock().await.as_ref() {
         return Ok(id.clone());
     }
 
+    // Resolve device_id with priority: disk cache → Supabase lookup → /claim-id (last resort).
+    // This prevents the signal server from minting a new ID on every restart.
     let machine_id = get_machine_id(&app);
 
-    // Always claim the ID from the server using machine_id.
-    // The server keeps machine_id → device_id mapping, so the same machine always
-    // gets the same ID (402-249-134 style). Disk-caching caused stale IDs to persist.
-    let base_url = signal_url.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
-    let client = reqwest::Client::new();
-    let resp = client.post(format!("{}/claim-id", base_url))
-        .json(&serde_json::json!({ "name": name, "os": "Linux", "machine_id": machine_id }))
-        .send().await.map_err(|e| e.to_string())?;
-    let claim_resp: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
-    let device_id = claim_resp["device_id"].as_str().ok_or("No device_id in response")?.to_string();
-    println!("[SIGNAL] Device ID from server (machine_id={}): {}", machine_id, device_id);
+    let device_id = if let Some(cached_id) = load_device_id(&app) {
+        // Disk cache is the fastest path and survives restarts.
+        println!("[SIGNAL] Using cached device ID from disk: {}", cached_id);
+        cached_id
+    } else if let Some(supabase_id) = lookup_supabase_device_id(&machine_id).await {
+        // Disk was cleared (reinstall, new data dir, etc.) but Supabase still has the
+        // previously registered ID for this machine — recover it before minting a new one.
+        println!("[SIGNAL] Recovered device ID from Supabase (machine_id={}): {}", machine_id, supabase_id);
+        save_device_id(&app, &supabase_id);
+        supabase_id
+    } else {
+        // No existing registration — claim a brand-new ID from the signal server.
+        let base_url = signal_url.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
+        let client = reqwest::Client::new();
+        match client
+            .post(format!("{}/claim-id", base_url))
+            .json(&serde_json::json!({ "name": name, "os": "Linux", "machine_id": machine_id }))
+            .send()
+            .await
+        {
+            Ok(resp) => match resp.json::<serde_json::Value>().await {
+                Ok(body) => match body["device_id"].as_str() {
+                    Some(id) => {
+                        let id = id.to_string();
+                        println!("[SIGNAL] New device ID from server (machine_id={}): {}", machine_id, id);
+                        save_device_id(&app, &id);
+                        id
+                    }
+                    None => return Err("No device_id in server response".to_string()),
+                },
+                Err(e) => return Err(format!("Failed to parse /claim-id response: {}", e)),
+            },
+            Err(e) => return Err(format!("Cannot reach signal server and no disk/Supabase cache: {}", e)),
+        }
+    };
 
     *SHARE_MANAGER.display_id.lock().await = Some(device_id.clone());
 
@@ -257,6 +309,8 @@ pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: S
     // 3. Send Heartbeat to register session
     let hb = SignalMessage::Heartbeat { device_id: device_id.clone() };
     ws_stream.send(Message::Text(serde_json::to_string(&hb).unwrap().into())).await.map_err(|e| e.to_string())?;
+
+    let _ = app.emit("remote-id-ready", device_id.clone());
 
     let app_c = app.clone();
     let device_id_hb = device_id.clone();
@@ -302,7 +356,7 @@ pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: S
                                         handle_answer(from, sdp).await;
                                     }
                                 }
-                                "ice_candidate" => {
+                                "ice_candidate" | "candidate" => {
                                     let from = signal["from_id"].as_str().unwrap_or("").to_string();
                                     let candidate = signal["candidate"].as_str().unwrap_or("").to_string();
                                     if !from.is_empty() {
@@ -323,9 +377,10 @@ pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: S
                 else => break,
             }
         }
-        println!("[SIGNAL] WS loop exited — clearing state.");
+        println!("[SIGNAL] WS loop exited — clearing signaling state (keeping active peers).");
         *SHARE_MANAGER.display_id.lock().await = None;
-        SHARE_MANAGER.peers.clear();
+        // Do NOT clear peers here — WebRTC P2P connections are independent of the signal
+        // server and must survive a WS drop. Clearing them would kill live sessions.
         *SIGNAL_SENDER.lock().await = None;
 
         // Auto-reconnect: keep trying until `is_running` is explicitly set to false
@@ -368,7 +423,6 @@ pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: S
                                 if let Err(e) = ws_stream.send(msg2).await {
                                     println!("[SIGNAL] Heartbeat failed after reconnect: {}", e);
                                     *SHARE_MANAGER.display_id.lock().await = None;
-                                    SHARE_MANAGER.peers.clear();
                                     *SIGNAL_SENDER.lock().await = None;
                                     break;
                                 }
@@ -389,7 +443,7 @@ pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: S
                                             "answer" => {
                                                 if !from.is_empty() { handle_answer(from, sdp).await; }
                                             }
-                                            "ice_candidate" => {
+                                            "ice_candidate" | "candidate" => {
                                                 let candidate = signal["candidate"].as_str().unwrap_or("").to_string();
                                                 if !from.is_empty() { handle_ice_candidate(from, candidate).await; }
                                             }
@@ -402,7 +456,6 @@ pub async fn ensure_signaling_active(app: AppHandle, name: String, signal_url: S
                                 if let Err(e) = ws_stream.send(out_msg).await {
                                     println!("[SIGNAL] Send error after reconnect: {}", e);
                                     *SHARE_MANAGER.display_id.lock().await = None;
-                                    SHARE_MANAGER.peers.clear();
                                     *SIGNAL_SENDER.lock().await = None;
                                     break;
                                 }
@@ -430,21 +483,27 @@ pub async fn start_sharing(
     serial: Arc<SerialManager>,
     tcp: Arc<TcpManager>,
     ssh: Arc<SshManager>,
-    name: String, 
+    name: String,
     signal_url: String
 ) -> Result<String, String> {
-    let mut running = SHARE_MANAGER.is_running.lock().await;
-    if *running {
-        return Err("Already sharing".to_string());
-    }
-    *running = true;
-
+    // Always refresh MANAGER_CONTEXT so the latest handles are used.
     *MANAGER_CONTEXT.lock().await = Some(ManagerContext {
         serial,
-        tcp,
+        _tcp: tcp,
         ssh,
         app: app.clone(),
     });
+
+    let mut running = SHARE_MANAGER.is_running.lock().await;
+    if *running {
+        // Auto-init already established signaling — return the existing ID.
+        if let Some(id) = SHARE_MANAGER.display_id.lock().await.as_ref() {
+            return Ok(id.clone());
+        }
+        // Running flag set but no ID yet (race) — fall through and let ensure_signaling_active handle it.
+    }
+    *running = true;
+    drop(running);
 
     ensure_signaling_active(app, name, signal_url).await
 }
@@ -481,10 +540,11 @@ async fn handle_offer(my_id: String, from: String, sdp: String) {
         let fid = my_id_ice.clone();
         Box::pin(async move {
             if let Some(candidate) = c {
+                let json = candidate.to_json().unwrap();
                 let msg = SignalMessage::IceCandidate { 
                     to_id: tid, 
                     from_id: fid,
-                    candidate: candidate.to_json().unwrap().candidate 
+                    candidate: serde_json::to_string(&json).unwrap() 
                 };
                 send_signal(msg).await;
             }
@@ -495,7 +555,7 @@ async fn handle_offer(my_id: String, from: String, sdp: String) {
     pc.on_data_channel(Box::new(move |d| {
         let from_cc = from_dc.clone();
         Box::pin(async move {
-            setup_data_channel(from_cc, d).await;
+            setup_data_channel(from_cc, d, None).await;
         })
     }));
 
@@ -507,10 +567,19 @@ async fn handle_offer(my_id: String, from: String, sdp: String) {
     send_signal(ans_msg).await;
 
     let pc_c = Arc::clone(&pc);
-    SHARE_MANAGER.peers.insert(from, PeerState { 
+    SHARE_MANAGER.peers.insert(from.clone(), PeerState {
         pc: pc_c,
         channels: Vec::new()
     });
+
+    // Drain any ICE candidates that arrived before the peer connection was created.
+    if let Some((_, queued)) = PENDING_CANDIDATES.remove(&from) {
+        if let Some(peer) = SHARE_MANAGER.peers.get(&from) {
+            for init in queued {
+                let _ = peer.pc.add_ice_candidate(init).await;
+            }
+        }
+    }
 }
 
 async fn handle_answer(from: String, sdp: String) {
@@ -520,18 +589,26 @@ async fn handle_answer(from: String, sdp: String) {
 }
 
 async fn handle_ice_candidate(from: String, candidate: String) {
+    let init = if let Ok(parsed) = serde_json::from_str::<RTCIceCandidateInit>(&candidate) {
+        parsed
+    } else {
+        RTCIceCandidateInit { candidate, ..Default::default() }
+    };
+
     if let Some(peer) = SHARE_MANAGER.peers.get(&from) {
-        let _ = peer.pc.add_ice_candidate(RTCIceCandidateInit {
-            candidate,
-            ..Default::default()
-        }).await;
+        // Peer already exists — apply immediately.
+        let _ = peer.pc.add_ice_candidate(init).await;
+    } else {
+        // Peer not yet created (offer not accepted yet) — queue for later.
+        println!("[SIGNAL] Queuing ICE candidate from {} (peer not ready yet)", from);
+        PENDING_CANDIDATES.entry(from).or_default().push(init);
     }
 }
 
 /// Mappings to track which DataChannel belongs to which virtual tab
 static DC_TAB_MAP: Lazy<DashMap<String, String>> = Lazy::new(|| DashMap::new());
 
-async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>) {
+async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle: Option<AppHandle>) {
     let label = d.label().to_owned();
     
     if let Some(mut peer) = SHARE_MANAGER.peers.get_mut(&peer_id) {
@@ -556,9 +633,11 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>) {
 
     let d_c = Arc::clone(&d);
     let peer_id_c = peer_id.clone();
+    let app_handle_c = app_handle.clone();
     d.on_message(Box::new(move |msg: DataChannelMessage| {
         let d_inner = Arc::clone(&d_c);
         let pid = peer_id_c.clone();
+        let app_val = app_handle_c.clone();
         Box::pin(async move {
             if msg.data.is_empty() { return; }
             let msg_type = msg.data[0];
@@ -570,9 +649,24 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>) {
                     
                     if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
                         let tab_id_str: &String = tab_id.value();
+                        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+                        let event_payload = (tab_id_str.clone(), payload.to_vec(), ts as u64, "RX".to_string());
+                        
+                        let mut emitted = false;
+                        if let Some(app) = app_val.as_ref() {
+                            let _ = app.emit("serial-data", event_payload.clone());
+                            emitted = true;
+                        }
+
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
                             println!("[WEBRTC] Routing data to tab {}", tab_id_str);
-                            let _ = ctx.serial.write_data(&ctx.app, tab_id_str, payload.to_vec(), "TX_REMOTE");
+                            if !emitted {
+                                let _ = ctx.app.emit("serial-data", event_payload);
+                            }
+                            // Only HOST should write to physical serial. Clients have "remote-x" tab IDs which won't write properly if they don't own it.
+                            if label != "serial-bridge" {
+                                let _ = ctx.serial.write_data(&ctx.app, tab_id_str, payload.to_vec(), "TX_REMOTE");
+                            }
                         }
                     } else {
                         println!("[WEBRTC] WARNING: No tab mapped for channel '{}'. DC_TAB_MAP dump: {:?}", label, DC_TAB_MAP.iter().map(|kv| kv.key().clone()).collect::<Vec<_>>());
@@ -703,8 +797,9 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
     }
 }
 
-pub async fn connect_remote(app: AppHandle, tab_id: String, device_id: String) -> Result<(), String> {
-    let my_id = ensure_signaling_active(app, "unknown".to_string(), "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string()).await?;
+pub async fn connect_remote(app: AppHandle, _tab_id: String, device_id: String) -> Result<(), String> {
+    // let my_id = ensure_signaling_active(app.clone(), "unknown".to_string(), "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string()).await?; // GCP Server
+    let my_id = ensure_signaling_active(app.clone(), "unknown".to_string(), "wss://plan-signal.onrender.com/ws".to_string()).await?;
     let api = create_webrtc_api();
     let config = create_webrtc_config();
     let pc = Arc::new(api.new_peer_connection(config).await.unwrap());
@@ -718,19 +813,26 @@ pub async fn connect_remote(app: AppHandle, tab_id: String, device_id: String) -
         let fid = my_id_ice.clone();
         Box::pin(async move {
             if let Some(candidate) = c {
+                let json = candidate.to_json().unwrap();
                 let msg = SignalMessage::IceCandidate { 
                     to_id: tid, 
                     from_id: fid,
-                    candidate: candidate.to_json().unwrap().candidate 
+                    candidate: serde_json::to_string(&json).unwrap() 
                 };
                 send_signal(msg).await;
             }
         })
     }));
 
+    let pc_c = Arc::clone(&pc);
+    SHARE_MANAGER.peers.insert(device_id.clone(), PeerState { 
+        pc: pc_c,
+        channels: Vec::new()
+    });
+
     // Always use "serial-bridge" so broadcast_remote_data can find this channel
     let dc = pc.create_data_channel("serial-bridge", None).await.unwrap();
-    setup_data_channel(device_id.clone(), dc).await;
+    setup_data_channel(device_id.clone(), dc, Some(app)).await;
 
     let offer = pc.create_offer(None).await.unwrap();
     pc.set_local_description(offer.clone()).await.unwrap();
@@ -742,11 +844,6 @@ pub async fn connect_remote(app: AppHandle, tab_id: String, device_id: String) -
     };
     send_signal(off_msg).await;
 
-    let pc_c = Arc::clone(&pc);
-    SHARE_MANAGER.peers.insert(device_id, PeerState { 
-        pc: pc_c,
-        channels: Vec::new()
-    });
     Ok(())
 }
 
@@ -792,130 +889,4 @@ pub async fn accept_remote_offer(from_id: String, sdp: String) -> Result<String,
     handle_offer(my_id, from_id, sdp).await;
     // Note: handle_offer generates and sends the Answer sdp internally via WebSocket
     Ok("Answer sent".to_string())
-}
-
-#[tauri::command]
-pub async fn handle_supabase_offer(app: AppHandle, to_id: String, from_id: String, offer_sdp: String) -> Result<String, String> {
-    println!("[WEBRTC-RUST] STEP 1: Incoming offer from {}", from_id);
-    
-    // Heuristic: Set our display_id if it's currently missing, based on the 'to_id' of this offer
-    let my_id = {
-        let mut id_lock = SHARE_MANAGER.display_id.lock().await;
-        if id_lock.is_none() {
-             println!("[WEBRTC-RUST] HEALING: display_id was NONE. Claiming ID: {}", to_id);
-             *id_lock = Some(to_id.clone());
-             to_id
-        } else {
-            id_lock.clone().unwrap()
-        }
-    };
-    println!("[WEBRTC-RUST] STEP 2: My Signaling ID Context: {}", my_id);
-    
-    let api = create_webrtc_api();
-    let config = create_webrtc_config();
-    let pc = Arc::new(api.new_peer_connection(config).await.map_err(|e| {
-        println!("[WEBRTC-RUST] ERROR: PeerConnection creation failed: {}", e);
-        e.to_string()
-    })?);
-    let pc_c = Arc::clone(&pc);
-    println!("[WEBRTC-RUST] STEP 3: PeerConnection CREATED");
-    
-    // 1. ICE Candidate Handler
-    let app_ice = app.clone();
-    let from_ice = from_id.clone();
-    let my_id_ice = my_id.clone();
-    pc.on_ice_candidate(Box::new(move |c| {
-        let app_inner = app_ice.clone();
-        let target = from_ice.clone();
-        let me = my_id_ice.clone();
-        Box::pin(async move {
-            if let Some(candidate) = c {
-                if let Ok(json) = candidate.to_json() {
-                    let msg = serde_json::json!({
-                        "type": "candidate",
-                        "from_id": me,
-                        "to_id": target,
-                        "payload": serde_json::to_string(&json).unwrap()
-                    });
-                    let _ = app_inner.emit("rust-signal-out", msg);
-                }
-            }
-        })
-    }));
-
-    // 2. Data Channel Handler
-    let from_dc = from_id.clone();
-    let peer_id_pc = from_id.clone();
-    let app_pc = app.clone();
-    pc.on_data_channel(Box::new(move |d| {
-        let pid = from_dc.clone();
-        Box::pin(async move {
-            setup_data_channel(pid, d).await;
-        })
-    }));
-
-    let _ = pc.on_peer_connection_state_change(Box::new(move |s: RTCPeerConnectionState| {
-        let pid = peer_id_pc.clone();
-        let app_pcc = app_pc.clone();
-        Box::pin(async move {
-            println!("[WEBRTC] Peer {} state changed: {}", pid, s);
-            if s == RTCPeerConnectionState::Connected {
-                let _ = app_pcc.emit("remote-peer-connected", pid);
-            } else if s == RTCPeerConnectionState::Disconnected || s == RTCPeerConnectionState::Failed {
-                let _ = app_pcc.emit("remote-peer-disconnected", pid);
-            }
-        })
-    }));
-    pc.set_remote_description(RTCSessionDescription::offer(offer_sdp).map_err(|e| {
-        println!("[WEBRTC-RUST] ERROR: set_remote_description failed: {}", e);
-        e.to_string()
-    })?).await.map_err(|e| e.to_string())?;
-    println!("[WEBRTC-RUST] STEP 4: Remote Description SET");
-    
-    // 4. Create Answer
-    let answer = pc.create_answer(None).await.map_err(|e| {
-        println!("[WEBRTC-RUST] ERROR: create_answer failed: {}", e);
-        e.to_string()
-    })?;
-    pc.set_local_description(answer.clone()).await.map_err(|e| e.to_string())?;
-    println!("[WEBRTC-RUST] STEP 5: Answer CREATED & SET locally");
-    
-    // 5. Store Peer
-    let id_key = from_id.trim().to_string();
-    SHARE_MANAGER.peers.insert(id_key.clone(), PeerState { 
-        pc: pc_c.clone(),
-        channels: Vec::new()
-    });
-    println!("[WEBRTC-RUST] SUCCESS: Peer ID {:?} INSTALLED in Manager. Total peers: {}", id_key, SHARE_MANAGER.peers.len());
-    
-    if let Some((_, candidates)) = PENDING_CANDIDATES.remove(&id_key) {
-        println!("[WEBRTC-RUST] Applying {} pending ICE candidates for {:?}", candidates.len(), id_key);
-        for cand in candidates {
-            if let Ok(init) = serde_json::from_str::<RTCIceCandidateInit>(&cand) {
-                let _ = pc_c.add_ice_candidate(init).await;
-            } else {
-                let _ = pc_c.add_ice_candidate(RTCIceCandidateInit { candidate: cand, ..Default::default() }).await;
-            }
-        }
-    }
-    
-    Ok(answer.sdp)
-}
-
-pub async fn handle_supabase_candidate(from_id: String, candidate_json: String) -> Result<(), String> {
-    let from_id = from_id.trim();
-    if let Some(peer) = SHARE_MANAGER.peers.get(from_id) {
-        if let Ok(init) = serde_json::from_str::<RTCIceCandidateInit>(&candidate_json) {
-            peer.pc.add_ice_candidate(init).await.map_err(|e| e.to_string())?;
-        } else {
-            // Fallback for simple string candidates if any
-            peer.pc.add_ice_candidate(RTCIceCandidateInit {
-                candidate: candidate_json,
-                ..Default::default()
-            }).await.map_err(|e| e.to_string())?;
-        }
-    } else {
-        PENDING_CANDIDATES.entry(from_id.to_string()).or_default().push(candidate_json);
-    }
-    Ok(())
 }

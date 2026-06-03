@@ -34,34 +34,24 @@ export class RemoteSignaling {
         this.onIncomingCallCallback = onIncomingCall;
         this.onLogCallback = onLog;
 
-        // Setup Rust Signal Listener
-        if (this.isTauriPlatform) {
-            safeListen<any>("rust-signal-out", (event) => {
-                const msg = event.payload;
-                console.log(`[Signaling] Relay from RUST: ${msg.type} to ${msg.to_id}`);
-                this.sendSignal(msg.to_id, msg.type === 'candidate' ? 'ice_candidate' : msg.type, msg.payload);
-            }).then(u => this.unlisten = u);
-        }
+
     }
 
     // 1. LISTEN FOR INCOMING SIGNALS
     public async startListening() {
         if (this.ws) return;
-        
+
         // In Tauri, the Rust backend handles the signaling WebSocket centrally.
         // We skip the JS-side connection to prevent duplicate handling and conflicts.
         if (this.isTauriPlatform) {
             console.log("[Signaling] Running in Tauri, delegating signaling to Rust.");
-            safeListen('rust-signal-out', (event) => {
-                const msg = event.payload as any;
-                this.ws?.send(JSON.stringify(msg));
-            }).then(u => this.unlisten = u);
             return;
         }
 
-        const wsUrl = "wss://plan-signal-29066723448.asia-south1.run.app/ws";
+        // const wsUrl = "wss://plan-signal-29066723448.asia-south1.run.app/ws"; // GCP Server (Saved for future use)
+        const wsUrl = "wss://plan-signal.onrender.com/ws";
         console.log(`[Signaling] Connecting to ${wsUrl} as ${this.myId}...`);
-        
+
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
@@ -132,14 +122,14 @@ export class RemoteSignaling {
             return;
         }
         this.lastTargetId = toId;
-        
+
         let msg: SignalMessage;
         if (type === 'offer' || type === 'answer') {
             msg = { type: type as SignalType, from_id: this.myId, to_id: toId, sdp: payload };
         } else if (type === 'ice_candidate') {
             msg = { type: 'ice_candidate', from_id: this.myId, to_id: toId, candidate: payload };
         } else {
-             return;
+            return;
         }
 
         this.ws.send(JSON.stringify(msg));
@@ -161,38 +151,23 @@ export class RemoteSignaling {
             if (this.onIncomingCallCallback) {
                 this.onIncomingCallCallback(fromId, async () => {
                     this.lastTargetId = fromId;
-                    if (this.isTauriPlatform) {
-                        safeInvoke('accept_remote_offer', { fromId, sdp: msg.sdp! })
-                            .catch(e => console.error("Failed to accept offer via Rust:", e));
-                    } else {
-                        const pc = this.initPeerConnection();
-                        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: msg.sdp! }));
-                        const answer = await pc.createAnswer();
-                        await pc.setLocalDescription(answer);
-                        this.sendSignal(fromId, 'answer', answer.sdp!);
-                    }
+                    const pc = this.initPeerConnection();
+                    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: msg.sdp! }));
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    this.sendSignal(fromId, 'answer', answer.sdp!);
                 });
             }
         }
         else if (msg.type === 'answer') {
-            if (this.isTauriPlatform) {
-                safeInvoke('process_supabase_offer', { toId: this.myId, fromId, sdp: msg.sdp! })
-                    .catch(e => console.error("Failed to pass answer to Rust:", e));
-            } else {
-                await this.peerConnection?.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp! }));
-            }
+            await this.peerConnection?.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp! }));
         }
         else if (msg.type === 'ice_candidate') {
-            if (this.isTauriPlatform) {
-                safeInvoke('process_supabase_candidate', { fromId, candidate: msg.candidate! })
-                    .catch(e => console.error("Failed to pass candidate to Rust:", e));
-            } else {
-                const pc = this.initPeerConnection();
-                try {
-                    await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(msg.candidate!)));
-                } catch (e) {
-                    console.error("[WebRTC] Error adding received ice candidate", e);
-                }
+            const pc = this.initPeerConnection();
+            try {
+                await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(msg.candidate!)));
+            } catch (e) {
+                console.error("[WebRTC] Error adding received ice candidate", e);
             }
         }
     }

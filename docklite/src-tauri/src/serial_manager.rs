@@ -173,7 +173,6 @@ impl SerialManager {
                         let mut wp = write_port.lock().unwrap();
                         if let Some(port) = wp.as_mut() {
                             let _ = port.write_all(&data);
-                            let _ = port.flush();
                             let _ = app.emit(
                                 "serial-data",
                                 (tab_id_str.clone(), data.clone(), ts, "TX_PERIODIC"),
@@ -184,6 +183,7 @@ impl SerialManager {
                                 &data,
                                 "TX_PERIODIC",
                             );
+                            let _ = port.flush();
                         } else {
                             // Port gone — stop thread
                             break;
@@ -278,6 +278,9 @@ impl SerialManager {
                 *wp = Some(write_port);
                 drop(wp);
 
+                // Clear buffer on open to ensure a fresh state
+                tab.rolling_buffer.lock().unwrap().clear();
+
                 self.start_reader(app, tab_id.to_string(), tab);
                 Ok(())
             }
@@ -286,14 +289,20 @@ impl SerialManager {
     }
 
     pub fn close_port(&self, tab_id: &str) {
-        let tabs = self.tabs.lock().unwrap();
-        if let Some(tab) = tabs.get(tab_id) {
-            let mut rp = tab.read_port.lock().unwrap();
-            *rp = None;
-            let mut wp = tab.write_port.lock().unwrap();
-            *wp = None;
-            let mut r_lock = tab.is_reading.lock().unwrap();
-            *r_lock = false;
+        let mut tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.remove(tab_id) {
+            {
+                let mut r_lock = tab.is_reading.lock().unwrap();
+                *r_lock = false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+            {
+                let mut rp = tab.read_port.lock().unwrap();
+                *rp = None;
+                let mut wp = tab.write_port.lock().unwrap();
+                *wp = None;
+            }
+            eprintln!("[SERIAL] [{}] Disconnected", tab_id);
         }
     }
 
@@ -376,32 +385,47 @@ impl SerialManager {
                                                 .windows(r.trigger_data.len())
                                                 .position(|w| w == r.trigger_data)
                                             {
-                                                let ts = SystemTime::now()
-                                                    .duration_since(UNIX_EPOCH)
-                                                    .unwrap()
-                                                    .as_millis();
-                                                let _ = app.emit(
-                                                    "serial-data",
-                                                    (
-                                                        tab_id.clone(),
-                                                        r.response_data.clone(),
-                                                        ts as u64,
-                                                        "TX_AUTO",
-                                                    ),
-                                                );
+                                                let actions = r.actions.clone();
+                                                let wp_clone = write_port.clone();
+                                                let app_clone = app.clone();
+                                                let tab_id_clone = tab_id.clone();
+                                                let log_file_clone = log_file.clone();
+                                                let log_format_clone = log_format.clone();
 
-                                                let mut wp = write_port.lock().unwrap();
-                                                if let Some(port) = wp.as_mut() {
-                                                    let _ = port.write_all(&r.response_data);
-                                                    let _ = port.flush();
-                                                }
+                                                std::thread::spawn(move || {
+                                                    for action in actions {
+                                                        if action.delay_ms > 0 {
+                                                            std::thread::sleep(std::time::Duration::from_millis(action.delay_ms));
+                                                        }
+                                                        let final_data = crate::template::evaluate_dynamic_tags(&action.response_data);
+                                                        let ts = SystemTime::now()
+                                                            .duration_since(UNIX_EPOCH)
+                                                            .unwrap()
+                                                            .as_millis();
+                                                        let _ = app_clone.emit(
+                                                            "serial-data",
+                                                            (
+                                                                tab_id_clone.clone(),
+                                                                final_data.clone(),
+                                                                ts as u64,
+                                                                "TX_AUTO",
+                                                            ),
+                                                        );
 
-                                                crate::log_utils::write_log_entry(
-                                                    &log_file,
-                                                    &log_format,
-                                                    &r.response_data,
-                                                    "TX_AUTO",
-                                                );
+                                                        let mut wp = wp_clone.lock().unwrap();
+                                                        if let Some(port) = wp.as_mut() {
+                                                            let _ = port.write_all(&final_data);
+                                                            let _ = port.flush();
+                                                        }
+
+                                                        crate::log_utils::write_log_entry(
+                                                            &log_file_clone,
+                                                            &log_format_clone,
+                                                            &final_data,
+                                                            "TX_AUTO",
+                                                        );
+                                                    }
+                                                });
 
                                                 let match_end = pos + r.trigger_data.len();
                                                 rb_lock.drain(0..match_end);
@@ -445,7 +469,6 @@ impl SerialManager {
         if let Some(port) = p.as_mut() {
             match port.write_all(&data) {
                 Ok(_) => {
-                    let _ = port.flush();
                     let ts = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
@@ -466,6 +489,7 @@ impl SerialManager {
                         &data,
                         direction,
                     );
+                    let _ = port.flush();
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),

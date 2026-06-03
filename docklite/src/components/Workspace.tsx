@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, memo } from "react";
-import { safeInvoke, safeListen, safeOpen, safeSave } from "../utils/tauri";
+import { safeInvoke, safeListen, safeOpen, safeSave, isTauri } from "../utils/tauri";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { Terminal, LogEntry } from "./Terminal";
 import { SequenceEditor } from "./SequenceEditor";
 import { ReactionEditor } from "./ReactionEditor";
 import { Project, Sequence, Reaction, PortInfo } from "../types";
 import { parseData, filterAnsi } from "../utils";
-import { RotateCw, Settings, ChevronDown, LineChart as LineChartIcon, Download, FileText, Globe, MonitorUp } from "lucide-react";
+import { RotateCw, Settings, ChevronDown, LineChart as LineChartIcon, Download, FileText, Globe, MonitorUp, PanelLeftClose, PanelLeft } from "lucide-react";
 import { ChartWindow } from "./ChartWindow";
 import { ChartConfig, ChartDataPoint, extractValue } from "../chart_utils";
 import { useLicense, FREE_LIMITS } from "../contexts/LicenseContext";
@@ -74,6 +74,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [editingSeq, setEditingSeq] = useState<Sequence | null>(null);
   const [editingReaction, setEditingReaction] = useState<Reaction | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
 
   // File Logging and Export State
@@ -374,16 +375,36 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
   // Synchronize Reactions Array to Rust Backend
   useEffect(() => {
-    const mappedReactions = project.reactions.map(r => ({
-       match_text: r.trigger_data,
-       match_hex: r.trigger_data,
-       reaction_text: r.response_sequence_id,
-       reaction_hex: r.response_sequence_id,
-    }));
-    safeInvoke("set_reactions", { tabId, newReactions: mappedReactions }).catch(e =>
+    const activeReactions = project.reactions
+      .filter(r => r.enabled)
+      .map(r => {
+        const triggerBytes = parseData(r.trigger_data, r.view_mode as any);
+        // Backward compatibility
+        let actions = r.actions || [];
+        if (actions.length === 0 && r.response_sequence_id) {
+          actions = [{ sequence_id: r.response_sequence_id, delay_ms: 0 }];
+        }
+
+        const mappedActions = actions.map(act => {
+          const seq = project.send_sequences.find(s => s.id === act.sequence_id);
+          const responseBytes = seq ? parseData(seq.data, seq.view_mode as any) : [];
+          return {
+            response_data: responseBytes,
+            delay_ms: act.delay_ms
+          };
+        }).filter(act => act.response_data.length > 0);
+
+        return {
+          trigger_data: triggerBytes,
+          actions: mappedActions
+        };
+      })
+      .filter(r => r.trigger_data.length > 0);
+
+    safeInvoke("set_reactions", { tabId, newReactions: activeReactions }).catch(e =>
       console.error("Failed to sync reactions:", e)
     );
-  }, [project.reactions, tabId]);
+  }, [project.reactions, project.send_sequences, tabId]);
 
   // Listen for serial/TCP/SSH data and connection events
   useEffect(() => {
@@ -523,7 +544,12 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       } else if (connectionType === 'SSH') {
         await safeInvoke("send_ssh_data", { tabId, data: bytes });
       }
-      incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
+      
+      // In web mode or remote, we need to push it manually because there's no Rust backend echoing it.
+      // But in local Tauri mode, the Rust backend evaluates dynamic templates and echoes the final data back.
+      if (!isTauri() || remoteChannel) {
+        incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
+      }
     } catch (e) {
       console.error(e);
       alert("Failed to send: " + e);
@@ -611,6 +637,15 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
 
 
+
+          {/* Sidebar Toggle Button */}
+          <button
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className={`p-1.5 rounded transition-colors hover:bg-accent`}
+            title={isSidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
+          >
+            {isSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
+          </button>
 
           {/* Chart Toggle Button */}
           <button
@@ -1134,10 +1169,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       <main className="flex-1 p-2 overflow-hidden">
         <div className="flex h-full gap-0">
           {/* Resizable Sidebar */}
-          <div
-            className="border rounded-lg p-2 bg-card overflow-hidden shrink-0"
-            style={{ width: sidebarWidth, minWidth: 200, maxWidth: 600 }}
-          >
+          {isSidebarOpen && (
+            <div
+              className="border rounded-lg p-2 bg-card overflow-hidden shrink-0"
+              style={{ width: sidebarWidth, minWidth: 200, maxWidth: 600 }}
+            >
             <ProjectSidebar
               project={{
                 ...project,
@@ -1176,10 +1212,12 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               onStartPeriodic={startPeriodic}
               onStopPeriodic={stopPeriodic}
             />
-          </div>
+            </div>
+          )}
 
           {/* Resize Handle */}
-          <div
+          {isSidebarOpen && (
+            <div
             className="w-2 cursor-col-resize flex items-center justify-center hover:bg-primary/20 transition-colors"
             onMouseDown={(e) => {
               e.preventDefault();
@@ -1198,8 +1236,9 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               document.addEventListener('mouseup', onMouseUp);
             }}
           >
-            <div className="w-1 h-8 bg-border rounded-full" />
-          </div>
+              <div className="w-1 h-8 bg-border rounded-full" />
+            </div>
+          )}
 
           {/* Main Terminal */}
           <div className="flex-1 h-full overflow-hidden">
@@ -1279,6 +1318,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             const newSeqs = project.send_sequences.filter((s: Sequence) => s.id !== seq.id);
             setProject({ ...project, send_sequences: newSeqs });
           }}
+          existingGroups={Array.from(new Set(project.send_sequences.map(s => s.group).filter(Boolean))) as string[]}
           onSend={handleSend}
         />
       )}
@@ -1293,6 +1333,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             setProject({ ...project, reactions: newReactions });
             onProjectNameChange(tabId, project.name);
             setEditingReaction(null);
+          }}
+          onDelete={(r: Reaction) => {
+            const newReactions = project.reactions.filter((reaction: Reaction) => reaction.id !== r.id);
+            setProject({ ...project, reactions: newReactions });
+            onProjectNameChange(tabId, project.name);
           }}
         />
       )}

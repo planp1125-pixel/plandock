@@ -13,17 +13,6 @@ pub struct Sequence {
     pub periodic_interval: Option<u64>,
 }
 
-pub fn parse_hex_string(hex_str: &str) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::new();
-    for part in hex_str.split_whitespace() {
-        match u8::from_str_radix(part, 16) {
-            Ok(b) => bytes.push(b),
-            Err(_) => return Err(format!("Invalid hex byte: {}", part)),
-        }
-    }
-    Ok(bytes)
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Reaction {
     pub id: String,

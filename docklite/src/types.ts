@@ -20,13 +20,20 @@ export interface Sequence {
     hotkey?: string;
     periodic_interval?: number; // Interval in ms for periodic sending
     periodic_enabled?: boolean; // Whether periodic sending is active
+    group?: string; // Identifier for template groups
+}
+
+export interface ReactionAction {
+    sequence_id: string;
+    delay_ms: number;
 }
 
 export interface Reaction {
     id: string; // Added ID
     name: string;
     trigger_data: string;
-    response_sequence_id: string;
+    response_sequence_id?: string; // Kept for backward compatibility
+    actions?: ReactionAction[];
     enabled: boolean;
     view_mode: "Hex" | "Ascii" | "Decimal" | "Binary";
 }

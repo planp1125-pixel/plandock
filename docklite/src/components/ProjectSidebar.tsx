@@ -1,7 +1,8 @@
 import { Project, Sequence, Reaction } from "../types";
-import { Plus, Save, Play, Upload, Edit, FastForward, Square, GripVertical, BookOpen } from "lucide-react";
+import { Plus, Save, Play, Upload, Edit, FastForward, Square, GripVertical, BookOpen, CheckSquare, Trash2, Search, FileDown, FileUp } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
-import { save, open } from '@tauri-apps/plugin-dialog';
+import { save, open, confirm } from '@tauri-apps/plugin-dialog';
+import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
 import { useState, useRef, useEffect } from "react";
 import {
     DndContext,
@@ -28,7 +29,7 @@ import atCommands from "../templates/at_commands.json";
 const AVAILABLE_TEMPLATES = [modbusRtu, atCommands];
 
 // Sortable Sequence Item Component
-function SortableSeqItem({ seq, isActivelySending, onSend, onEdit, onStartPeriodic, onStopPeriodic, connected }: {
+function SortableSeqItem({ seq, isActivelySending, onSend, onEdit, onStartPeriodic, onStopPeriodic, connected, isSelectionMode, isSelected, onToggleSelect }: {
     seq: Sequence;
     isActivelySending: boolean;
     onSend: (seq: Sequence) => void;
@@ -36,22 +37,30 @@ function SortableSeqItem({ seq, isActivelySending, onSend, onEdit, onStartPeriod
     onStartPeriodic: (seq: Sequence) => void;
     onStopPeriodic: (id: string) => void;
     connected: boolean;
+    isSelectionMode?: boolean;
+    isSelected?: boolean;
+    onToggleSelect?: (seq: Sequence) => void;
 }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: seq.id });
-    const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
+    const style = { transform: CSS.Transform.toString(transform), transition: isSelectionMode ? undefined : transition, opacity: isDragging ? 0.5 : 1 };
 
     return (
         <div
             ref={setNodeRef}
             style={style}
-            className={`flex items-center gap-1 p-2 border rounded hover:bg-accent group ${isActivelySending ? 'bg-green-500/20 border-green-500' : ''}`}
+            className={`flex items-center gap-1 p-2 border rounded hover:bg-accent group ${isSelected ? 'bg-primary/10 border-primary' : isActivelySending ? 'bg-green-500/20 border-green-500' : ''}`}
         >
-            {/* Drag Handle */}
-            <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 hover:bg-secondary rounded">
-                <GripVertical className="w-4 h-4 text-muted-foreground" />
-            </div>
-            {/* Click to SEND data */}
-            <div className="flex-1 cursor-pointer truncate" onClick={() => onSend(seq)} title="Click to send">
+            {isSelectionMode ? (
+                <div className="p-1 cursor-pointer flex items-center justify-center w-6" onClick={() => onToggleSelect?.(seq)}>
+                    <input type="checkbox" checked={isSelected} readOnly className="w-3.5 h-3.5 accent-primary pointer-events-none" />
+                </div>
+            ) : (
+                <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 hover:bg-secondary rounded">
+                    <GripVertical className="w-4 h-4 text-muted-foreground" />
+                </div>
+            )}
+            
+            <div className="flex-1 cursor-pointer truncate" onClick={() => isSelectionMode ? onToggleSelect?.(seq) : onSend(seq)} title={isSelectionMode ? "Select sequence" : "Click to send"}>
                 <div className="font-medium text-sm flex items-center gap-1">
                     {isActivelySending ? (
                         <button onClick={(e) => { e.stopPropagation(); onStopPeriodic(seq.id); }} className="p-0.5 bg-red-500 rounded hover:bg-red-600" title="Stop">
@@ -62,48 +71,68 @@ function SortableSeqItem({ seq, isActivelySending, onSend, onEdit, onStartPeriod
                             <FastForward className="w-3 h-3 fill-current text-blue-500" />
                         </button>
                     ) : (
-                        <Play className="w-3 h-3 fill-current text-green-500" />
+                        <Play className={`w-3 h-3 fill-current ${isSelectionMode ? 'text-muted-foreground/50' : 'text-green-500'}`} />
                     )}
                     {seq.name}
+                    {seq.group && <span className="ml-1.5 px-1.5 py-[1px] rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[9px] uppercase font-bold tracking-wider">{seq.group}</span>}
                     {seq.periodic_enabled && <span className="text-xs text-blue-500 ml-1">({seq.periodic_interval}ms)</span>}
                 </div>
                 <div className="text-xs text-muted-foreground truncate">{seq.data || "<empty>"}</div>
             </div>
-            {/* Edit button */}
-            <button className="p-1.5 hover:bg-secondary rounded opacity-50 group-hover:opacity-100" onClick={() => onEdit(seq)} title="Edit">
-                <Edit className="w-3.5 h-3.5" />
-            </button>
+            
+            {!isSelectionMode && (
+                <button className="p-1.5 hover:bg-secondary rounded opacity-50 group-hover:opacity-100 transition-opacity" onClick={() => onEdit(seq)} title="Edit">
+                    <Edit className="w-3.5 h-3.5" />
+                </button>
+            )}
         </div>
     );
 }
 
 // Sortable Reaction Item Component
-function SortableReactionItem({ reaction, onEdit, onToggle }: {
+function SortableReactionItem({ reaction, onEdit, onToggle, isSelectionMode, isSelected, onToggleSelect }: {
     reaction: Reaction;
     onEdit: (r: Reaction) => void;
     onToggle: (id: string, enabled: boolean) => void;
+    isSelectionMode?: boolean;
+    isSelected?: boolean;
+    onToggleSelect?: (r: Reaction) => void;
 }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: reaction.id });
-    const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1 };
+    const style = { transform: CSS.Transform.toString(transform), transition: isSelectionMode ? undefined : transition, opacity: isDragging ? 0.5 : 1 };
 
     return (
-        <div ref={setNodeRef} style={style} className="flex items-center gap-1 p-2 border rounded hover:bg-accent">
-            {/* Drag Handle */}
-            <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing p-1 hover:bg-secondary rounded">
-                <GripVertical className="w-4 h-4 text-muted-foreground" />
-            </div>
-            {/* Checkbox */}
-            <input
-                type="checkbox"
-                checked={reaction.enabled}
-                onChange={(e) => onToggle(reaction.id, e.target.checked)}
-                className="w-4 h-4 accent-green-500 cursor-pointer"
-                title={reaction.enabled ? "Disable" : "Enable"}
-            />
-            <div className="flex-1 truncate cursor-pointer" onClick={() => onEdit(reaction)}>
+        <div ref={setNodeRef} style={style} className={`flex items-center gap-2 p-2 border rounded hover:bg-accent group ${isSelected ? 'bg-primary/10 border-primary' : ''}`}>
+            {isSelectionMode ? (
+                <div className="cursor-pointer flex items-center justify-center w-6 shrink-0" onClick={() => onToggleSelect?.(reaction)}>
+                    <input type="checkbox" checked={isSelected} readOnly className="w-3.5 h-3.5 accent-primary pointer-events-none" />
+                </div>
+            ) : (
+                <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing hover:bg-secondary rounded shrink-0 p-1">
+                    <GripVertical className="w-4 h-4 text-muted-foreground" />
+                </div>
+            )}
+            
+            <div className="flex-1 truncate cursor-pointer" onClick={() => isSelectionMode ? onToggleSelect?.(reaction) : onEdit(reaction)}>
                 <div className="font-medium text-sm">{reaction.name}</div>
                 <div className="text-xs text-muted-foreground truncate">{reaction.trigger_data || "<empty>"}</div>
             </div>
+            
+            {/* iOS Style Toggle Switch for Enable/Disable */}
+            {!isSelectionMode && (
+                <button
+                    onClick={() => onToggle(reaction.id, !reaction.enabled)}
+                    className={`relative inline-flex h-4 w-8 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${reaction.enabled ? 'bg-green-500' : 'bg-zinc-300 dark:bg-zinc-700'}`}
+                    role="switch"
+                    aria-checked={reaction.enabled}
+                    title={reaction.enabled ? "Disable Rule" : "Enable Rule"}
+                >
+                    <span
+                        aria-hidden="true"
+                        className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${reaction.enabled ? 'translate-x-4' : 'translate-x-0'}`}
+                    />
+                </button>
+            )}
         </div>
     );
 }
@@ -121,6 +150,22 @@ interface Props {
 }
 
 export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEditReaction, connected, activePeriodicIds, onStartPeriodic, onStopPeriodic }: Props) {
+    // Selection state
+    const [isSelectionMode, setIsSelectionMode] = useState(false);
+    const [selectedSeqIds, setSelectedSeqIds] = useState<Set<string>>(new Set());
+    const [isReactionSelectionMode, setIsReactionSelectionMode] = useState(false);
+    const [selectedReactionIds, setSelectedReactionIds] = useState<Set<string>>(new Set());
+    const [searchQuery, setSearchQuery] = useState("");
+
+    // Filter sequences
+    const filteredSequences = project.send_sequences.filter(s => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        return (s.name.toLowerCase().includes(q) || 
+               (s.data && s.data.toLowerCase().includes(q)) || 
+               (s.group && s.group.toLowerCase().includes(q)));
+    });
+
     // DnD sensors
     const sensors = useSensors(
         useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -231,7 +276,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
         }
     };
 
-    const loadTemplate = (tmpl: typeof modbusRtu) => {
+    const loadTemplate = (tmpl: any) => {
         // Map template items to Sequence objects
         const newSeqs: Sequence[] = tmpl.sequences.map((s: any) => ({
             id: crypto.randomUUID(),
@@ -239,7 +284,8 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
             data: s.data,
             view_mode: s.view_mode as "Hex" | "Ascii" | "Decimal",
             periodic_enabled: false,
-            periodic_interval: 1000
+            periodic_interval: 1000,
+            group: tmpl.name
         }));
 
         onUpdate({
@@ -250,13 +296,55 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
         setShowTemplates(false);
     };
 
+    const importCustomGroup = async () => {
+        try {
+            const path = await open({
+                filters: [{ name: 'Plan Template', extensions: ['plantpl', 'json'] }]
+            });
+            if (!path) return;
+            const content = await readTextFile(path);
+            const parsed = JSON.parse(content);
+            if (!parsed.sequences || !Array.isArray(parsed.sequences)) {
+                alert("Invalid template format.");
+                return;
+            }
+            
+            const groupName = parsed.name || path.split(/[/\\]/).pop()?.replace(/\.(plantpl|json)$/, '') || "Custom Group";
+            
+            const newSeqs: Sequence[] = parsed.sequences.map((s: any) => ({
+                id: crypto.randomUUID(),
+                name: s.name || "Unnamed",
+                data: s.data || "",
+                view_mode: s.view_mode || "Ascii",
+                periodic_enabled: false,
+                periodic_interval: 1000,
+                group: groupName
+            }));
+            onUpdate({ ...project, send_sequences: [...project.send_sequences, ...newSeqs] });
+            setShowTemplates(false);
+        } catch (e) {
+            console.error(e);
+            alert("Error importing custom group: " + e);
+        }
+    };
+
     return (
         <div className="h-full flex flex-col gap-4">
             {/* Sequences List */}
-            <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="flex-1 flex flex-col overflow-hidden relative">
                 <div className="flex justify-between items-center mb-2">
                     <h3 className="font-semibold">Send Sequences</h3>
                     <div className="flex items-center gap-1">
+                        <button
+                            className={`p-1 rounded ${isSelectionMode ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground'}`}
+                            onClick={() => {
+                                setIsSelectionMode(!isSelectionMode);
+                                setSelectedSeqIds(new Set());
+                            }}
+                            title="Toggle Selection Mode"
+                        >
+                            <CheckSquare className="w-4 h-4" />
+                        </button>
                         {/* Templates Button */}
                         <div className="relative" ref={templateRef}>
                             <button
@@ -274,6 +362,13 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                                         Protocol Templates
                                     </div>
                                     <div className="py-1">
+                                        <button
+                                            className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors flex items-center gap-2 text-blue-500 font-medium"
+                                            onClick={importCustomGroup}
+                                        >
+                                            <FileUp className="w-3.5 h-3.5" /> Import Custom Group
+                                        </button>
+                                        <div className="border-t my-1" />
                                         {AVAILABLE_TEMPLATES.map((t, i) => (
                                             <button
                                                 key={i}
@@ -306,10 +401,22 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                     </div>
                 </div>
 
-                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleSeqDragEnd}>
-                    <SortableContext items={project.send_sequences.map(s => s.id)} strategy={verticalListSortingStrategy}>
-                        <div className="flex-1 overflow-y-auto space-y-1">
-                            {project.send_sequences.map((seq) => {
+                {/* Search Bar */}
+                <div className="mb-2 relative">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                    <input
+                        type="text"
+                        placeholder="Search or filter groups..."
+                        className="w-full bg-background border rounded pl-7 pr-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                    />
+                </div>
+
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={isSelectionMode ? undefined : handleSeqDragEnd}>
+                    <SortableContext items={filteredSequences.map(s => s.id)} strategy={verticalListSortingStrategy}>
+                        <div className="flex-1 overflow-y-auto space-y-1 pb-14">
+                            {filteredSequences.map((seq) => {
                                 const isActivelySending = activePeriodicIds.has(seq.id) && connected;
                                 return (
                                     <SortableSeqItem
@@ -321,21 +428,94 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                                         onStartPeriodic={onStartPeriodic}
                                         onStopPeriodic={onStopPeriodic}
                                         connected={connected}
+                                        isSelectionMode={isSelectionMode}
+                                        isSelected={selectedSeqIds.has(seq.id)}
+                                        onToggleSelect={(s) => {
+                                            const newSet = new Set(selectedSeqIds);
+                                            if (newSet.has(s.id)) newSet.delete(s.id);
+                                            else newSet.add(s.id);
+                                            setSelectedSeqIds(newSet);
+                                        }}
                                     />
                                 );
                             })}
                         </div>
                     </SortableContext>
                 </DndContext>
+
+                {/* Floating Bulk Action Bar */}
+                {isSelectionMode && selectedSeqIds.size > 0 && (
+                    <div className="absolute bottom-2 left-2 right-2 bg-card border shadow-lg rounded-md p-2 flex justify-between items-center z-10 animate-in slide-in-from-bottom-2">
+                        <span className="text-xs font-semibold px-2">{selectedSeqIds.size} selected</span>
+                        <div className="flex gap-2">
+                            <button
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs flex items-center gap-1.5 font-medium transition-colors"
+                                onClick={async () => {
+                                    const path = await save({
+                                        filters: [{ name: 'Plan Template', extensions: ['plantpl', 'json'] }],
+                                        defaultPath: 'custom_group.plantpl'
+                                    });
+                                    if (!path) return;
+                                    const selected = project.send_sequences.filter(s => selectedSeqIds.has(s.id));
+                                    const exportData = {
+                                        name: path.split(/[/\\]/).pop()?.replace(/\.(plantpl|json)$/, '') || 'Custom Group',
+                                        sequences: selected.map(s => ({
+                                            name: s.name,
+                                            data: s.data,
+                                            view_mode: s.view_mode
+                                        }))
+                                    };
+                                    try {
+                                        await writeTextFile(path, JSON.stringify(exportData, null, 2));
+                                        alert("Group exported successfully!");
+                                        setIsSelectionMode(false);
+                                        setSelectedSeqIds(new Set());
+                                    } catch (e) {
+                                        alert("Error exporting: " + e);
+                                    }
+                                }}
+                            >
+                                <FileDown className="w-3.5 h-3.5" />
+                                Export
+                            </button>
+                            <button
+                                className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs flex items-center gap-1.5 font-medium transition-colors"
+                                onClick={async () => {
+                                const yes = await confirm(`Delete ${selectedSeqIds.size} sequence(s)?`, { title: 'Confirm Deletion', kind: 'warning' });
+                                if (yes) {
+                                    const filtered = project.send_sequences.filter(s => !selectedSeqIds.has(s.id));
+                                    onUpdate({ ...project, send_sequences: filtered });
+                                    setIsSelectionMode(false);
+                                    setSelectedSeqIds(new Set());
+                                }
+                            }}
+                        >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Delete
+                        </button>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Reaction Rules */}
-            <div className="flex-1 flex flex-col overflow-hidden min-h-[150px]">
+            <div className="flex-1 flex flex-col overflow-hidden min-h-[150px] relative">
                 <div className="flex justify-between items-center mb-2">
                     <h3 className="font-semibold">Reaction Rules</h3>
-                    <button
-                        className="p-1 hover:bg-accent rounded"
-                        onClick={() => {
+                    <div className="flex items-center gap-1">
+                        <button
+                            className={`p-1 rounded ${isReactionSelectionMode ? 'bg-primary text-primary-foreground' : 'hover:bg-accent text-muted-foreground'}`}
+                            onClick={() => {
+                                setIsReactionSelectionMode(!isReactionSelectionMode);
+                                setSelectedReactionIds(new Set());
+                            }}
+                            title="Toggle Selection Mode"
+                        >
+                            <CheckSquare className="w-4 h-4" />
+                        </button>
+                        <button
+                            className="p-1 hover:bg-accent rounded"
+                            onClick={() => {
                             const newReaction: Reaction = {
                                 id: crypto.randomUUID(),
                                 name: "New Rule",
@@ -349,11 +529,12 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                     >
                         <Plus className="w-4 h-4" />
                     </button>
+                    </div>
                 </div>
 
-                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleReactionDragEnd}>
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={isReactionSelectionMode ? undefined : handleReactionDragEnd}>
                     <SortableContext items={project.reactions.map(r => r.id)} strategy={verticalListSortingStrategy}>
-                        <div className="flex-1 overflow-y-auto space-y-1">
+                        <div className="flex-1 overflow-y-auto space-y-1 pb-14">
                             {project.reactions.map((r) => (
                                 <SortableReactionItem
                                     key={r.id}
@@ -365,11 +546,41 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                                         );
                                         onUpdate({ ...project, reactions: updated });
                                     }}
+                                    isSelectionMode={isReactionSelectionMode}
+                                    isSelected={selectedReactionIds.has(r.id)}
+                                    onToggleSelect={(r) => {
+                                        const newSet = new Set(selectedReactionIds);
+                                        if (newSet.has(r.id)) newSet.delete(r.id);
+                                        else newSet.add(r.id);
+                                        setSelectedReactionIds(newSet);
+                                    }}
                                 />
                             ))}
                         </div>
                     </SortableContext>
                 </DndContext>
+
+                {/* Floating Bulk Action Bar for Reactions */}
+                {isReactionSelectionMode && selectedReactionIds.size > 0 && (
+                    <div className="absolute bottom-2 left-2 right-2 bg-card border shadow-lg rounded-md p-2 flex justify-between items-center z-10 animate-in slide-in-from-bottom-2">
+                        <span className="text-xs font-semibold px-2">{selectedReactionIds.size} selected</span>
+                        <button
+                            className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs flex items-center gap-1.5 font-medium transition-colors"
+                            onClick={async () => {
+                                const yes = await confirm(`Delete ${selectedReactionIds.size} rule(s)?`, { title: 'Confirm Deletion', kind: 'warning' });
+                                if (yes) {
+                                    const filtered = project.reactions.filter(r => !selectedReactionIds.has(r.id));
+                                    onUpdate({ ...project, reactions: filtered });
+                                    setIsReactionSelectionMode(false);
+                                    setSelectedReactionIds(new Set());
+                                }
+                            }}
+                        >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Delete
+                        </button>
+                    </div>
+                )}
             </div>
 
             <div className="flex gap-2 relative">
