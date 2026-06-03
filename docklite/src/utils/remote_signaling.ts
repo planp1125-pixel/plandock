@@ -1,4 +1,4 @@
-import { safeInvoke, safeListen, isTauri } from './tauri';
+import { safeInvoke, isTauri } from './tauri';
 
 export type SignalType = 'offer' | 'answer' | 'ice_candidate' | 'heartbeat';
 
