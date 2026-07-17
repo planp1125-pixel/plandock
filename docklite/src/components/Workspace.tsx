@@ -591,7 +591,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       } else if (connectionType === 'TCP') {
         await safeInvoke("send_tcp_data", { tabId, data: bytes });
       } else if (connectionType === 'SSH') {
-        await safeInvoke("send_ssh_data", { tabId, data: bytes });
+        const sshBytes = [...bytes];
+        if (sshBytes.length > 0 && sshBytes[sshBytes.length - 1] !== 10 && sshBytes[sshBytes.length - 1] !== 13) {
+          sshBytes.push(10); // Append LF (\n)
+        }
+        await safeInvoke("send_ssh_data", { tabId, data: sshBytes });
       }
       
       // In web mode or remote, we need to push it manually because there's no Rust backend echoing it.
