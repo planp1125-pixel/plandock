@@ -4,6 +4,15 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.5] - 2026-07-17
+
+### Fixed
+- **SSH Connection Argument Mismatch:** Resolved `connect_ssh missing required key user` error by aligning frontend SafeInvoke parameters (`user`, `authMode`, and `authSecret`) with Rust backend API signatures.
+- **Connection Type Reset Bug:** Fixed active protocol resetting back to `Serial` whenever command sequences or reactions were updated in the sidebar, by decoupling project load triggers from active workspace config state.
+- **SSH Command Execution from Library:** Auto-appended newline (`\n`) to sequences sent from the command library when connected via SSH, allowing them to execute immediately instead of remaining in the remote shell's input buffer.
+
+---
+
 ## [0.5.4] - 2026-07-17
 
 ### Added
