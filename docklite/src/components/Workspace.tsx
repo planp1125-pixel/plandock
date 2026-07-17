@@ -375,7 +375,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       setStopBits(project.serial_config.stop_bits);
       setFlowControl(project.serial_config.flow_control);
     }
-  }, [project]);
+  }, [project.file_path, project.name]);
 
   // Synchronize Reactions Array to Rust Backend
   useEffect(() => {
