@@ -634,8 +634,9 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           tabId,
           host: sshHost,
           port: sshPort,
-          username: sshUsername,
-          auth: sshAuthMode === 'password' ? { password: sshAuthSecret } : { key_path: sshAuthSecret }
+          user: sshUsername,
+          authMode: sshAuthMode,
+          authSecret: sshAuthSecret
         });
       } else if (protocol === "Remote") {
         await safeInvoke("connect_remote", { tabId, deviceId: remoteDeviceId });
