@@ -175,41 +175,78 @@ impl SshManager {
                                             .windows(r.trigger_data.len())
                                             .position(|w| w == r.trigger_data)
                                         {
-                                            let actions = r.actions.clone();
-                                            let app_clone2 = app_clone.clone();
-                                            let tab_id_str2 = tab_id_str.clone();
-                                            let log_file2 = log_file.clone();
-                                            let log_format2 = log_format.clone();
-                                            let tx_clone2 = tx_clone.clone();
+                                             let mut actions = r.actions.clone();
+                                             if !actions.is_empty() {
+                                                 if actions[0].delay_ms == 0 {
+                                                     let first_action = actions.remove(0);
+                                                     let final_data = crate::template::evaluate_dynamic_tags(&first_action.response_data);
 
-                                            std::thread::spawn(move || {
-                                                for action in actions {
-                                                    if action.delay_ms > 0 {
-                                                        std::thread::sleep(std::time::Duration::from_millis(action.delay_ms));
-                                                    }
-                                                    let final_data = crate::template::evaluate_dynamic_tags(&action.response_data);
-                                                    let ts = SystemTime::now()
-                                                        .duration_since(UNIX_EPOCH)
-                                                        .unwrap()
-                                                        .as_millis();
-                                                    let _ = app_clone2.emit(
-                                                        "serial-data",
-                                                        (
-                                                            tab_id_str2.clone(),
-                                                            final_data.clone(),
-                                                            ts as u64,
-                                                            "TX_AUTO",
-                                                        ),
-                                                    );
-                                                    crate::log_utils::write_log_entry(
-                                                        &log_file2,
-                                                        &log_format2,
-                                                        &final_data,
-                                                        "TX_AUTO",
-                                                    );
-                                                    let _ = tx_clone2.send(final_data);
-                                                }
-                                            });
+                                                     let _ = tx_clone.send(final_data.clone());
+
+                                                     let ts = SystemTime::now()
+                                                         .duration_since(UNIX_EPOCH)
+                                                         .unwrap()
+                                                         .as_millis();
+
+                                                     let _ = app_clone.emit(
+                                                         "serial-data",
+                                                         (
+                                                             tab_id_str.clone(),
+                                                             final_data.clone(),
+                                                             ts as u64,
+                                                             "TX_AUTO",
+                                                         ),
+                                                     );
+
+                                                     crate::log_utils::write_log_entry(
+                                                         &log_file,
+                                                         &log_format,
+                                                         &final_data,
+                                                         "TX_AUTO",
+                                                     );
+                                                 }
+
+                                                 if !actions.is_empty() {
+                                                     let app_clone2 = app_clone.clone();
+                                                     let tab_id_str2 = tab_id_str.clone();
+                                                     let log_file2 = log_file.clone();
+                                                     let log_format2 = log_format.clone();
+                                                     let tx_clone2 = tx_clone.clone();
+
+                                                     std::thread::spawn(move || {
+                                                         for action in actions {
+                                                             if action.delay_ms > 0 {
+                                                                 std::thread::sleep(std::time::Duration::from_millis(action.delay_ms));
+                                                             }
+                                                             let final_data = crate::template::evaluate_dynamic_tags(&action.response_data);
+
+                                                             let _ = tx_clone2.send(final_data.clone());
+
+                                                             let ts = SystemTime::now()
+                                                                 .duration_since(UNIX_EPOCH)
+                                                                 .unwrap()
+                                                                 .as_millis();
+
+                                                             let _ = app_clone2.emit(
+                                                                 "serial-data",
+                                                                 (
+                                                                     tab_id_str2.clone(),
+                                                                     final_data.clone(),
+                                                                     ts as u64,
+                                                                     "TX_AUTO",
+                                                                 ),
+                                                             );
+
+                                                             crate::log_utils::write_log_entry(
+                                                                 &log_file2,
+                                                                 &log_format2,
+                                                                 &final_data,
+                                                                 "TX_AUTO",
+                                                             );
+                                                         }
+                                                     });
+                                                 }
+                                             }
 
                                             let match_end = pos + r.trigger_data.len();
                                             rb_lock.drain(0..match_end);

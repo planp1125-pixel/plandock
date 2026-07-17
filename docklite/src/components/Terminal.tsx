@@ -70,16 +70,25 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
 
     // Keyboard Shortcuts
     const handleKeyDown = useCallback((e: KeyboardEvent) => {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        if (!isActive) return;
+
+        if (((e.ctrlKey || e.metaKey) && e.key === 'f') || (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'f')) {
             e.preventDefault();
-            setSearchOpen(true);
-            setTimeout(() => searchInputRef.current?.focus(), 50);
+            const nextOpen = !searchOpen;
+            setSearchOpen(nextOpen);
+            if (nextOpen) {
+                setTimeout(() => searchInputRef.current?.focus(), 50);
+            }
+        }
+        if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'k') {
+            e.preventDefault();
+            onClear();
         }
         if (e.key === 'Escape' && searchOpen) {
             setSearchOpen(false);
             setSearchQuery("");
         }
-    }, [searchOpen]);
+    }, [searchOpen, onClear, isActive]);
 
     useEffect(() => {
         window.addEventListener('keydown', handleKeyDown);
@@ -302,10 +311,20 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
                         <input type="checkbox" checked={autoScroll} onChange={e => setAutoScroll(e.target.checked)} />
                         Auto-scroll
                     </label>
-                    <button onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50); }} className={clsx("p-1 hover:text-white", searchOpen && "text-yellow-400")}>
-                        <Search className="w-4 h-4" />
+                    <button
+                        onClick={() => { setSearchOpen(!searchOpen); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 50); }}
+                        className={clsx("flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-gray-300 hover:bg-zinc-800 hover:text-white transition-colors", searchOpen && "text-yellow-400 bg-zinc-800")}
+                    >
+                        <Search className="w-3.5 h-3.5" />
+                        <span>Find</span>
                     </button>
-                    <button onClick={onClear} className="p-1 hover:text-red-400"><Trash2 className="w-4 h-4" /></button>
+                    <button
+                        onClick={onClear}
+                        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-gray-300 hover:bg-zinc-800 hover:text-red-400 transition-colors"
+                    >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Clear</span>
+                    </button>
                 </div>
             </div>
 

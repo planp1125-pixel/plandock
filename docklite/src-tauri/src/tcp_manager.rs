@@ -279,49 +279,86 @@ impl TcpManager {
                                             .windows(r.trigger_data.len())
                                             .position(|w| w == r.trigger_data)
                                         {
-                                            let actions = r.actions.clone();
-                                            let w_stream_clone = stream_clone.clone();
-                                            let app_clone = app.clone();
-                                            let tab_id_clone = tab_id.clone();
-                                            let log_file_clone = log_file.clone();
-                                            let log_format_clone = log_format.clone();
+                                             let mut actions = r.actions.clone();
+                                             if !actions.is_empty() {
+                                                 if actions[0].delay_ms == 0 {
+                                                     let first_action = actions.remove(0);
+                                                     let final_data = crate::template::evaluate_dynamic_tags(&first_action.response_data);
 
-                                            std::thread::spawn(move || {
-                                                for action in actions {
-                                                    if action.delay_ms > 0 {
-                                                        std::thread::sleep(std::time::Duration::from_millis(action.delay_ms));
-                                                    }
-                                                    let final_data = crate::template::evaluate_dynamic_tags(&action.response_data);
-                                                    let ts = SystemTime::now()
-                                                        .duration_since(UNIX_EPOCH)
-                                                        .unwrap()
-                                                        .as_millis();
-                                                    let _ = app_clone.emit(
-                                                        "serial-data",
-                                                        (
-                                                            tab_id_clone.clone(),
-                                                            final_data.clone(),
-                                                            ts as u64,
-                                                            "TX_AUTO",
-                                                        ),
-                                                    );
+                                                     if let Some(w_stream_arc) = stream_clone.lock().unwrap().as_ref() {
+                                                         let mut w_stream = &**w_stream_arc;
+                                                         let _ = w_stream.write_all(&final_data);
+                                                         let _ = w_stream.flush();
+                                                     }
 
-                                                    crate::log_utils::write_log_entry(
-                                                        &log_file_clone,
-                                                        &log_format_clone,
-                                                        &final_data,
-                                                        "TX_AUTO",
-                                                    );
+                                                     let ts = SystemTime::now()
+                                                         .duration_since(UNIX_EPOCH)
+                                                         .unwrap()
+                                                         .as_millis();
 
-                                                    if let Some(w_stream_arc) =
-                                                        w_stream_clone.lock().unwrap().as_ref()
-                                                    {
-                                                        let mut w_stream = &**w_stream_arc;
-                                                        let _ = w_stream.write_all(&final_data);
-                                                        let _ = w_stream.flush();
-                                                    }
-                                                }
-                                            });
+                                                     let _ = app.emit(
+                                                         "serial-data",
+                                                         (
+                                                             tab_id.clone(),
+                                                             final_data.clone(),
+                                                             ts as u64,
+                                                             "TX_AUTO",
+                                                         ),
+                                                     );
+
+                                                     crate::log_utils::write_log_entry(
+                                                         &log_file,
+                                                         &log_format,
+                                                         &final_data,
+                                                         "TX_AUTO",
+                                                     );
+                                                 }
+
+                                                 if !actions.is_empty() {
+                                                     let w_stream_clone = stream_clone.clone();
+                                                     let app_clone = app.clone();
+                                                     let tab_id_clone = tab_id.clone();
+                                                     let log_file_clone = log_file.clone();
+                                                     let log_format_clone = log_format.clone();
+
+                                                     std::thread::spawn(move || {
+                                                         for action in actions {
+                                                             if action.delay_ms > 0 {
+                                                                 std::thread::sleep(std::time::Duration::from_millis(action.delay_ms));
+                                                             }
+                                                             let final_data = crate::template::evaluate_dynamic_tags(&action.response_data);
+
+                                                             if let Some(w_stream_arc) = w_stream_clone.lock().unwrap().as_ref() {
+                                                                 let mut w_stream = &**w_stream_arc;
+                                                                 let _ = w_stream.write_all(&final_data);
+                                                                 let _ = w_stream.flush();
+                                                             }
+
+                                                             let ts = SystemTime::now()
+                                                                 .duration_since(UNIX_EPOCH)
+                                                                 .unwrap()
+                                                                 .as_millis();
+
+                                                             let _ = app_clone.emit(
+                                                                 "serial-data",
+                                                                 (
+                                                                     tab_id_clone.clone(),
+                                                                     final_data.clone(),
+                                                                     ts as u64,
+                                                                     "TX_AUTO",
+                                                                 ),
+                                                             );
+
+                                                             crate::log_utils::write_log_entry(
+                                                                 &log_file_clone,
+                                                                 &log_format_clone,
+                                                                 &final_data,
+                                                                 "TX_AUTO",
+                                                             );
+                                                         }
+                                                     });
+                                                 }
+                                             }
 
                                             let match_end = pos + r.trigger_data.len();
                                             rb_lock.drain(0..match_end);

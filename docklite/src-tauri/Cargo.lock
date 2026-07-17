@@ -1098,7 +1098,7 @@ dependencies = [
 
 [[package]]
 name = "docklite"
-version = "0.5.2"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "dashmap",

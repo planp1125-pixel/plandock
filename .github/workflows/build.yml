@@ -15,11 +15,11 @@ jobs:
   build-linux:
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: setup node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: install dependencies (ubuntu-only)
@@ -44,11 +44,11 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: setup node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: install frontend dependencies
@@ -70,11 +70,11 @@ jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: setup node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
       - name: install rust stable
         uses: dtolnay/rust-toolchain@stable
       - name: install frontend dependencies

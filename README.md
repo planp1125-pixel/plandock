@@ -21,3 +21,16 @@ This repository contains the Plan Terminal desktop application and its supportin
   1. **Frontend WebSockets:** `docklite/src/utils/remote_signaling.ts`
   2. **Frontend HTTP Client:** `docklite/src/contexts/RemoteContext.tsx`
   3. **Backend Rust Client:** `docklite/src-tauri/src/share_manager.rs`
+
+## Keyboard Shortcuts (Desktop Edition)
+
+Plan Terminal includes native keyboard shortcuts for fast workflows:
+
+| Action | Shortcut |
+|---|---|
+| **Connect** | `Ctrl + Alt + C` |
+| **Disconnect** | `Ctrl + Alt + D` |
+| **Find/Search in Terminal** | `Ctrl + Alt + F` (or `Ctrl + F` / `⌘ + F`) |
+| **Clear Terminal** | `Ctrl + Alt + K` |
+| **Toggle Live Logging** | `Ctrl + Alt + L` |
+| **Toggle Session Recording** | `Ctrl + Alt + R` |

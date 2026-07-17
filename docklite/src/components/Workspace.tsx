@@ -76,6 +76,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
+  const [rxBytes, setRxBytes] = useState(0);
+  const [txBytes, setTxBytes] = useState(0);
+  const [rxPackets, setRxPackets] = useState(0);
+  const [txPackets, setTxPackets] = useState(0);
 
   // File Logging and Export State
   const { isPro } = useLicense();
@@ -415,6 +419,14 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       const displayDir = dir.startsWith("TX") ? "TX" : "RX";
       incomingQueue.current.push({ bytes, ts, dir: displayDir });
 
+      if (displayDir === "TX") {
+        setTxBytes(prev => prev + bytes.length);
+        setTxPackets(prev => prev + 1);
+      } else {
+        setRxBytes(prev => prev + bytes.length);
+        setRxPackets(prev => prev + 1);
+      }
+
       // Chart Processing
       if (dir === "RX" && chartConfigsRef.current.length > 0) {
         const line = String.fromCharCode(...bytes);
@@ -472,6 +484,43 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       unlistenPlaybackEnded.then(f => f());
     };
   }, []);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    if (!isActive) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === 'c') {
+          e.preventDefault();
+          if (!connected && !isConnecting && (connectionType !== 'Serial' || selectedPort)) {
+            handleConnect();
+          }
+        } else if (key === 'd') {
+          e.preventDefault();
+          if (connected) {
+            handleDisconnect();
+          }
+        } else if (key === 'r') {
+          e.preventDefault();
+          if (connected) {
+            handleToggleRecord();
+          }
+        } else if (key === 'l') {
+          e.preventDefault();
+          if (isLiveLogging) {
+            stopLogging();
+          } else {
+            setShowLogOptions(prev => !prev);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isActive, connected, isConnecting, connectionType, selectedPort, isLiveLogging, isRecording]);
 
   // Handle auto-share trigger (triggered when Host accepts a call)
   useEffect(() => {
@@ -559,6 +608,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const handleConnect = async () => {
     try {
       setIsConnecting(true);
+      setRxBytes(0);
+      setTxBytes(0);
+      setRxPackets(0);
+      setTxPackets(0);
       const protocol = connectionType || "Serial";
       if (protocol === "Serial") {
         await safeInvoke("open_serial_port", {
@@ -641,19 +694,20 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           {/* Sidebar Toggle Button */}
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className={`p-1.5 rounded transition-colors hover:bg-accent`}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-xs text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors"
             title={isSidebarOpen ? "Hide Sidebar" : "Show Sidebar"}
           >
-            {isSidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeft className="w-4 h-4" />}
+            {isSidebarOpen ? <PanelLeftClose className="w-3.5 h-3.5" /> : <PanelLeft className="w-3.5 h-3.5" />}
           </button>
 
           {/* Chart Toggle Button */}
           <button
             onClick={() => setIsChartOpen(!isChartOpen)}
-            className={`p-1.5 rounded transition-colors ${isChartOpen ? 'bg-blue-600 text-white' : 'hover:bg-accent'}`}
+            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors ${isChartOpen ? 'bg-blue-600 text-white font-medium' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}
             title="Toggle Real-Time Chart"
           >
-            <LineChartIcon className="w-4 h-4" />
+            <LineChartIcon className="w-3.5 h-3.5" />
+            <span>Chart</span>
           </button>
 
           {/* Separator */}
@@ -663,11 +717,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           <div className="relative flex items-center">
             <button
               onClick={() => isLiveLogging ? stopLogging() : setShowLogOptions(!showLogOptions)}
-              className={`p-1.5 rounded transition-colors ${isLiveLogging ? 'text-red-400 bg-red-900/40 animate-pulse' : 'hover:bg-accent'}`}
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors ${isLiveLogging ? 'text-red-400 bg-red-950 border border-red-500/50 font-medium' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`}
               title={isLiveLogging ? "Stop Logging" : "Start Logging to File (.txt/.log)"}
             >
-              <FileText className="w-4 h-4" />
-              {isLiveLogging && <span className="absolute text-[8px] font-bold bottom-0 right-0">LOG</span>}
+              <FileText className="w-3.5 h-3.5" />
+              <span>{isLiveLogging ? 'Logging' : 'Log'}</span>
             </button>
             {showLogOptions && !isLiveLogging && (
               <div className="absolute left-0 top-full mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 p-2 w-48 text-left">
@@ -687,8 +741,9 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           </div>
 
           <div className="relative flex items-center pr-1">
-            <button onClick={() => setShowExportOptions(!showExportOptions)} className={`p-1.5 rounded transition-colors ${showExportOptions ? 'bg-accent' : 'hover:bg-accent'}`} title="Export Logs">
-              <Download className="w-4 h-4" />
+            <button onClick={() => setShowExportOptions(!showExportOptions)} className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors ${showExportOptions ? 'bg-zinc-800 text-white font-medium' : 'text-zinc-400 hover:bg-zinc-800 hover:text-white'}`} title="Export Logs">
+              <Download className="w-3.5 h-3.5" />
+              <span>Export</span>
             </button>
             {showExportOptions && (
               <div className="absolute left-0 top-full mt-1 bg-zinc-800 border border-zinc-700 rounded shadow-lg z-50 p-2 w-48 text-left">
@@ -717,7 +772,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           {/* Session Recording Controls */}
           <div className="flex bg-zinc-800/30 rounded p-0.5 ml-0.5 gap-1 items-center">
             <button
-              className={`text-white rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors ${connected ? (isRecording ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-rose-600 hover:bg-rose-700 shadow-sm') : 'bg-zinc-800/80 text-zinc-500 cursor-not-allowed opacity-60 font-medium'}`}
+              className={`text-white rounded px-2 py-0.5 flex items-center gap-1 transition-colors ${connected ? (isRecording ? 'bg-zinc-700 hover:bg-zinc-600' : 'bg-rose-600 hover:bg-rose-700') : 'bg-zinc-800/80 text-zinc-500 cursor-not-allowed opacity-60 font-medium'}`}
               onClick={connected ? handleToggleRecord : undefined}
               disabled={!connected}
               title={connected ? (isRecording ? "Stop Recording Session" : "Record Session to .plog file") : "Connect to a port to enable Session Recording"}
@@ -726,13 +781,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               {isRecording ? (
                 <><div className="w-1.5 h-1.5 bg-rose-500 rounded-[1px]" /> Stop</>
               ) : (
-                <><div className={`w-1.5 h-1.5 ${connected ? 'bg-rose-200 shadow-[0_0_8px_rgba(251,113,133,0.8)] animate-pulse' : 'bg-zinc-600'} rounded-full`} /> Record</>
+                <><div className={`w-1.5 h-1.5 ${connected ? 'bg-rose-200' : 'bg-zinc-600'} rounded-full`} /> Record</>
               )}
             </button>
 
             {!isRecording && (
               <button
-                className="text-white bg-indigo-600 shadow-sm hover:bg-indigo-700 rounded px-2.5 py-1 flex items-center gap-1.5 transition-colors"
+                className="text-white bg-indigo-600 hover:bg-indigo-700 rounded px-2 py-0.5 flex items-center gap-1 transition-colors"
                 onClick={handlePlayRecording}
                 title="Open and Play a .plog session"
                 style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.01em' }}
@@ -1097,7 +1152,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           {/* Connection Status Label */}
           <div className="flex flex-col">
             <span className={`text-[11px] font-bold truncate max-w-[120px] tracking-tight flex items-center gap-1.5 ${connected ? 'text-green-500' : 'text-zinc-500'}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-zinc-500'}`} />
+              <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-500' : 'bg-zinc-500'}`} />
               {connected ? (
                 (connectionType === 'Remote' && remoteDeviceId)
                   ? `Remote (${remoteDeviceId})`
@@ -1122,7 +1177,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             <div className="flex items-center gap-2">
               {!connected ? (
                 <button
-                  className={`text-white rounded px-3 py-1 text-sm font-medium ${isConnecting ? 'bg-zinc-600 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
+                  className={`text-white rounded px-2.5 py-0.5 text-xs font-semibold ${isConnecting ? 'bg-zinc-600 cursor-not-allowed' : 'bg-green-600 hover:bg-green-700'}`}
                   onClick={handleConnect}
                   disabled={isConnecting || (connectionType === 'Serial' && !selectedPort)}
                 >
@@ -1130,7 +1185,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 </button>
               ) : (
                 <button
-                  className="bg-red-600 hover:bg-red-700 text-white rounded px-3 py-1 text-sm font-medium"
+                  className="bg-red-600 hover:bg-red-700 text-white rounded px-2.5 py-0.5 text-xs font-semibold"
                   onClick={() => handleDisconnect()}
                 >
                   Disconnect
@@ -1218,25 +1273,26 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           {/* Resize Handle */}
           {isSidebarOpen && (
             <div
-            className="w-2 cursor-col-resize flex items-center justify-center hover:bg-primary/20 transition-colors"
-            onMouseDown={(e) => {
-              e.preventDefault();
-              const startX = e.clientX;
-              const startWidth = sidebarWidth;
-              const onMouseMove = (moveEvent: MouseEvent) => {
-                const delta = moveEvent.clientX - startX;
-                const newWidth = Math.max(200, Math.min(600, startWidth + delta));
-                setSidebarWidth(newWidth);
-              };
-              const onMouseUp = () => {
-                document.removeEventListener('mousemove', onMouseMove);
-                document.removeEventListener('mouseup', onMouseUp);
-              };
-              document.addEventListener('mousemove', onMouseMove);
-              document.addEventListener('mouseup', onMouseUp);
-            }}
-          >
-              <div className="w-1 h-8 bg-border rounded-full" />
+              className="w-1.5 cursor-col-resize flex items-center justify-center bg-zinc-950 border-l border-r border-zinc-850 hover:bg-zinc-800/40 hover:border-zinc-700 transition-colors relative group"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                const startX = e.clientX;
+                const startWidth = sidebarWidth;
+                const onMouseMove = (moveEvent: MouseEvent) => {
+                  const delta = moveEvent.clientX - startX;
+                  const newWidth = Math.max(200, Math.min(600, startWidth + delta));
+                  setSidebarWidth(newWidth);
+                };
+                const onMouseUp = () => {
+                  document.removeEventListener('mousemove', onMouseMove);
+                  document.removeEventListener('mouseup', onMouseUp);
+                };
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+              }}
+            >
+              <div className="w-[1px] h-full bg-zinc-800 group-hover:bg-blue-500/80 transition-colors" />
+              <div className="absolute w-1 h-6 bg-zinc-700 group-hover:bg-blue-400 rounded-full opacity-60 transition-colors" />
             </div>
           )}
 
@@ -1341,9 +1397,59 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           }}
         />
       )}
+      {/* Bottom Status Bar */}
+      <div className="h-6 bg-zinc-950 border-t border-zinc-800 flex items-center justify-between px-3 text-[11px] text-zinc-400 select-none shrink-0 font-sans">
+        {/* Left: Connection info */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 font-semibold">
+            <span className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`} />
+            <span className={connected ? 'text-green-500' : 'text-zinc-500'}>
+              {connected ? 'CONNECTED' : 'DISCONNECTED'}
+            </span>
+          </div>
+          {connected && (
+            <>
+              <span className="text-zinc-600">|</span>
+              <span className="text-zinc-300 font-medium">{activeProtocol || connectionType}</span>
+              <span className="text-zinc-500 font-mono">
+                {activeProtocol === 'Serial' && `(${selectedPort} @ ${baudRate} bps, ${dataBits}-${parity.substring(0, 1).toUpperCase()}-${stopBits})`}
+                {activeProtocol === 'TCP' && `(${tcpHost}:${tcpPort})`}
+                {activeProtocol === 'SSH' && `(${sshUsername}@${sshHost}:${sshPort})`}
+                {activeProtocol === 'Remote' && `(Remote ID: ${remoteDeviceId || peerId || 'N/A'})`}
+              </span>
+            </>
+          )}
+        </div>
 
-      {/* License Dialog */}
+        {/* Center: Live Logging / Recording state */}
+        <div className="flex items-center gap-2">
+          {isLiveLogging && (
+            <span className="text-red-400 font-bold bg-red-950/40 border border-red-500/30 px-1.5 py-px rounded-[3px] text-[9px] uppercase tracking-wider">
+              ● Live Logging Active
+            </span>
+          )}
+          {isRecording && (
+            <span className="text-rose-400 font-bold bg-rose-950/40 border border-rose-500/30 px-1.5 py-px rounded-[3px] text-[9px] uppercase tracking-wider">
+              ● Recording Session
+            </span>
+          )}
+        </div>
 
+        {/* Right: Counters */}
+        <div className="flex items-center gap-3 font-mono text-[10px] text-zinc-400">
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-500 font-sans">TX:</span>
+            <span className="text-zinc-300 font-bold">{txBytes > 1024 ? `${(txBytes/1024).toFixed(2)} KB` : `${txBytes} B`}</span>
+            <span className="text-zinc-600 font-sans">({txPackets})</span>
+          </div>
+          <span className="text-zinc-700">|</span>
+          <div className="flex items-center gap-1">
+            <span className="text-zinc-500 font-sans">RX:</span>
+            <span className="text-zinc-300 font-bold">{rxBytes > 1024 ? `${(rxBytes/1024).toFixed(2)} KB` : `${rxBytes} B`}</span>
+            <span className="text-zinc-600 font-sans">({rxPackets})</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 });
