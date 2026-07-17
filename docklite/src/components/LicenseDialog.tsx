@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useLicense } from '../contexts/LicenseContext';
 import { X, Key, Check, AlertCircle, Crown, ExternalLink } from 'lucide-react';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 interface LicenseDialogProps {
     isOpen: boolean;
@@ -123,7 +124,7 @@ export function LicenseDialog({ isOpen, onClose }: LicenseDialogProps) {
 
                         <div className="border-t pt-4">
                             <div className="text-sm text-muted-foreground mb-3">
-                                <h4 className="font-medium text-foreground mb-2">Upgrade to Pro - $29</h4>
+                                <h4 className="font-medium text-foreground mb-2">Early Bird Access - $49</h4>
                                 <ul className="space-y-1 text-xs">
                                     <li>• Unlimited sequences & reactions</li>
                                     <li>• Real-time file logging</li>
@@ -132,14 +133,18 @@ export function LicenseDialog({ isOpen, onClose }: LicenseDialogProps) {
                                     <li>• Lifetime license</li>
                                 </ul>
                             </div>
-                            <a
-                                href="https://planplabs.gumroad.com/l/plan-terminal"
-                                target="_blank"
-                                rel="noopener noreferrer"
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        await openUrl('https://planplabs.gumroad.com/l/eblqxg');
+                                    } catch (err) {
+                                        console.error('Failed to open link:', err);
+                                    }
+                                }}
                                 className="flex items-center justify-center gap-2 w-full py-2 text-sm text-primary hover:underline"
                             >
                                 Purchase License <ExternalLink className="w-3 h-3" />
-                            </a>
+                            </button>
                         </div>
                     </div>
                 )}

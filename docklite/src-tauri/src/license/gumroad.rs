@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use super::LicenseStatus;
 
 // TODO: Replace with your actual Gumroad product permalink
-const GUMROAD_PRODUCT_ID: &str = "plan-terminal";
+const GUMROAD_PRODUCT_ID: &str = "eblqxg";
 
 const GUMROAD_VERIFY_URL: &str = "https://api.gumroad.com/v2/licenses/verify";
 

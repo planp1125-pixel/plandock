@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use gumroad::GumroadProvider;
 
-const TRIAL_DAYS: i64 = 14;
+const TRIAL_DAYS: i64 = 30;
 
 /// Shared license status used across all providers
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]

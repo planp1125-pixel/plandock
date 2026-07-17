@@ -31,3 +31,6 @@ test_tcp
 # Logs
 *.log
 npm-debug.log*
+
+# Trial information document
+trial_info.md
