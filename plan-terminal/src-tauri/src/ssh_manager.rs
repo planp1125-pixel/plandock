@@ -385,8 +385,8 @@ impl SshManager {
     }
 
     pub fn disconnect(&self, tab_id: &str) {
-        let mut tabs = self.tabs.lock().unwrap();
-        if let Some(tab) = tabs.remove(tab_id) {
+        let tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.get(tab_id) {
             {
                 let mut tx_lock = tab.tx.lock().unwrap();
                 *tx_lock = None;
@@ -396,6 +396,10 @@ impl SshManager {
                 if let Some(stream) = t.take() {
                     let _ = stream.shutdown(std::net::Shutdown::Both);
                 }
+            }
+            {
+                let mut senders = tab.periodic_senders.lock().unwrap();
+                senders.clear();
             }
             eprintln!("[SSH] [{}] Disconnected", tab_id);
         }

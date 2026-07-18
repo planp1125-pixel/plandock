@@ -105,8 +105,8 @@ impl TcpManager {
     }
 
     pub fn disconnect(&self, tab_id: &str) {
-        let mut tabs = self.tabs.lock().unwrap();
-        if let Some(tab) = tabs.remove(tab_id) {
+        let tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.get(tab_id) {
             {
                 let mut r = tab.is_reading.lock().unwrap();
                 *r = false;
@@ -118,6 +118,10 @@ impl TcpManager {
                     let _ = stream_arc.shutdown(std::net::Shutdown::Both);
                 }
                 *s = None;
+            }
+            {
+                let mut senders = tab.periodic_senders.lock().unwrap();
+                senders.clear();
             }
             eprintln!("[TCP] [{}] Disconnected", tab_id);
         }

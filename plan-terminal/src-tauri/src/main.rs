@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    docklite_lib::run()
+    plan_terminal_lib::run()
 }

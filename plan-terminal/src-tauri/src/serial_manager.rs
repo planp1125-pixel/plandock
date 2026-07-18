@@ -289,8 +289,8 @@ impl SerialManager {
     }
 
     pub fn close_port(&self, tab_id: &str) {
-        let mut tabs = self.tabs.lock().unwrap();
-        if let Some(tab) = tabs.remove(tab_id) {
+        let tabs = self.tabs.lock().unwrap();
+        if let Some(tab) = tabs.get(tab_id) {
             {
                 let mut r_lock = tab.is_reading.lock().unwrap();
                 *r_lock = false;

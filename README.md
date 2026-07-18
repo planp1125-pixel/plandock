@@ -15,7 +15,7 @@ This repository contains the Plan Terminal desktop application and its supportin
 * **Project URL:** `https://xpxzssueokeomxopzdbr.supabase.co`
 * **Purpose:** Tracks device availability status (e.g. `online`, `available`, `offline`) via the `remote_devices` table.
 
-### 3. Client Application (`/docklite`)
+### 3. Client Application (`/plan-terminal`)
 * **Platform:** Tauri Desktop Application (React frontend + Rust backend).
 * **Target URLs Config:** To point the client application to a different signaling server (e.g. local vs Render), update the URLs in the following files:
   1. **Frontend WebSockets:** `docklite/src/utils/remote_signaling.ts`

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(node -e ':*)",
+      "Bash(grep -n \"^\\\\s*}\\\\s*;\\\\s*$\\\\|^\\\\s*}\\\\s*\\)\\\\s*;\\\\s*$\" /home/mani/projects/plan_terminal/docklite/src/components/Workspace.tsx)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)"
+    ]
+  }
+}

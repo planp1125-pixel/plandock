@@ -1,6 +1,8 @@
 import socket
 import threading
 import time
+import io
+import contextlib
 
 def handle_client(conn, addr):
     print(f"[+] Connected by {addr}")
@@ -14,6 +16,26 @@ def handle_client(conn, addr):
             if not data:
                 break
             print(f"[RX] {data.decode('utf-8', errors='replace')} (Hex: {data.hex()})")
+            
+            # Easter Egg trigger
+            if data.strip() == b"FLY":
+                import antigravity
+                conn.sendall(b"You are now flying...\n")
+                
+            # Geohashing Easter Egg context
+            elif data.startswith(b"GEOHASH"):
+                try:
+                    # Expected format: GEOHASH 37.421542 -122.085589 2005-05-26-10458.68
+                    parts = data.decode('utf-8', errors='ignore').strip().split()
+                    lat, lon, date = float(parts[1]), float(parts[2]), parts[3].encode('utf-8')
+                    
+                    import antigravity
+                    f = io.StringIO()
+                    with contextlib.redirect_stdout(f):
+                        antigravity.geohash(lat, lon, date)
+                    conn.sendall(f"Geohash Destination: {f.getvalue()}".encode('utf-8'))
+                except Exception as e:
+                    conn.sendall(b"GEOHASH Error. Usage: GEOHASH <lat> <lon> <date_dow>\n")
     except Exception as e:
         print(f"[-] Error: {e}")
     finally:
