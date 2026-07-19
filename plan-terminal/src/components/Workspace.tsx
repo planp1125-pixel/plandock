@@ -225,15 +225,31 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         const batch = [...incomingQueue.current];
         incomingQueue.current = [];
 
-        setLogs(prev => {
-          if (batch.length === 0) return prev;
-          let next = [...prev];
-          const gap = Number(localStorage.getItem('terminal-ts-gap') || '100');
+        const gap = Number(localStorage.getItem('terminal-ts-gap') || '100');
+        const aggregatedBatch: { bytes: number[], ts: number, dir: string }[] = [];
 
-          for (const item of batch) {
+        for (const item of batch) {
+          if (aggregatedBatch.length > 0) {
+            const lastAgg = aggregatedBatch[aggregatedBatch.length - 1];
+            if (lastAgg.dir === item.dir && (item.ts - lastAgg.ts) < gap && lastAgg.bytes.length < 8000) {
+              for (let i = 0; i < item.bytes.length; i++) {
+                lastAgg.bytes.push(item.bytes[i]);
+              }
+              continue;
+            }
+          }
+          aggregatedBatch.push({ bytes: [...item.bytes], ts: item.ts, dir: item.dir });
+        }
+
+        setLogs(prev => {
+          if (aggregatedBatch.length === 0) return prev;
+          let next = [...prev];
+
+          for (const item of aggregatedBatch) {
             const last = lastRef.current;
             if (last && next.length > 0 && next[next.length - 1].id === last.id &&
-              last.direction === item.dir && (item.ts - last.timestamp) < gap) {
+              last.direction === item.dir && (item.ts - last.timestamp) < gap &&
+              next[next.length - 1].data.length < 8000) {
               const lastIdx = next.length - 1;
               const newData = [...next[lastIdx].data, ...item.bytes];
               next[lastIdx] = {

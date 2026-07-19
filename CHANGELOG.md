@@ -4,6 +4,24 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.7] - 2026-07-19
+
+### Optimized
+- **High-Speed/Large Data Performance Optimization:** Pre-aggregated incoming serial/TCP/SSH log chunks before updating React state to resolve UI hang/freeze issues under high-throughput data streams.
+- **Terminal Rendering Size Cap:** Enforced a maximum capacity limit of 8000 bytes per individual log entry. This splits massive continuous streams into digestible entries, preventing React from rendering massive single-node updates.
+
+---
+
+## [0.5.6] - 2026-07-18
+
+### Changed
+- **Project Directory Rename:** Renamed the Tauri app client directory from `docklite` to `plan-terminal` to match the official project branding.
+
+### Fixed
+- **Connection Tab State Loss:** Fixed active connection and tab states being reset or lost during tab switching and app updates.
+
+---
+
 ## [0.5.5] - 2026-07-17
 
 ### Fixed
