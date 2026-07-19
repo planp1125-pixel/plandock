@@ -139,14 +139,14 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
         lastScrollTop.current = el.scrollTop;
 
         // 5. Capture NEW anchor for the next log arrival
-        if (isActive) {
+        if (isActive && !autoScroll) {
             const children = el.querySelectorAll('[data-log-id]');
             let bestId = null;
             let bestOffset = 0;
+            const containerRect = el.getBoundingClientRect();
             for (let i = 0; i < children.length; i++) {
                 const child = children[i] as HTMLElement;
                 const rect = child.getBoundingClientRect();
-                const containerRect = el.getBoundingClientRect();
                 if (rect.top >= containerRect.top) {
                     bestId = child.getAttribute('data-log-id');
                     bestOffset = rect.top - containerRect.top;
@@ -352,7 +352,7 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
                 style={{ overflowAnchor: 'none' }}
                 onScroll={onScroll}
             >
-                {logs.slice(-1000).map(log => {
+                {logs.slice(-400).map(log => {
                     const processedData = log.processedData || log.data;
                     if (searchQuery && filterMode && !getSearchableText(processedData).toLowerCase().includes(searchQuery.toLowerCase())) return null;
                     return (

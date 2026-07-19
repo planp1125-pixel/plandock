@@ -229,6 +229,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         const aggregatedBatch: { bytes: number[], ts: number, dir: string }[] = [];
 
         for (const item of batch) {
+          if (!item || !Array.isArray(item.bytes)) continue;
           if (aggregatedBatch.length > 0) {
             const lastAgg = aggregatedBatch[aggregatedBatch.length - 1];
             if (lastAgg.dir === item.dir && (item.ts - lastAgg.ts) < gap && lastAgg.bytes.length < 8000) {
@@ -246,6 +247,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           let next = [...prev];
 
           for (const item of aggregatedBatch) {
+            if (!item || !Array.isArray(item.bytes)) continue;
             const last = lastRef.current;
             if (last && next.length > 0 && next[next.length - 1].id === last.id &&
               last.direction === item.dir && (item.ts - last.timestamp) < gap &&
