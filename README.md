@@ -18,9 +18,9 @@ This repository contains the Plan Terminal desktop application and its supportin
 ### 3. Client Application (`/plan-terminal`)
 * **Platform:** Tauri Desktop Application (React frontend + Rust backend).
 * **Target URLs Config:** To point the client application to a different signaling server (e.g. local vs Render), update the URLs in the following files:
-  1. **Frontend WebSockets:** `docklite/src/utils/remote_signaling.ts`
-  2. **Frontend HTTP Client:** `docklite/src/contexts/RemoteContext.tsx`
-  3. **Backend Rust Client:** `docklite/src-tauri/src/share_manager.rs`
+  1. **Frontend WebSockets:** `plan-terminal/src/utils/remote_signaling.ts`
+  2. **Frontend HTTP Client:** `plan-terminal/src/contexts/RemoteContext.tsx`
+  3. **Backend Rust Client:** `plan-terminal/src-tauri/src/share_manager.rs`
 
 ## Keyboard Shortcuts (Desktop Edition)
 
