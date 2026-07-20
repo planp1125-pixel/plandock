@@ -5,7 +5,7 @@ import { safeInvoke, safeListen, isTauri } from '../utils/tauri';
 
 interface IncomingCall {
     fromId: string;
-    accept: () => void;
+    accept: () => Promise<void>;
     reject: () => void;
 }
 
@@ -55,10 +55,13 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 const [fromId, sdp] = event.payload;
                 setIncomingCall({
                     fromId,
-                    accept: () => {
+                    accept: async () => {
                         setActivePeers(prev => ({ ...prev, [fromId]: { id: fromId, status: 'connecting' } }));
-                        safeInvoke('accept_remote_offer', { fromId, sdp })
-                            .catch(e => console.error("Failed to accept offer:", e));
+                        try {
+                            await safeInvoke('accept_remote_offer', { fromId, sdp });
+                        } catch (e) {
+                            console.error("Failed to accept offer:", e);
+                        }
                         setIncomingCall(null);
                     },
                     reject: () => { setIncomingCall(null); }
@@ -257,9 +260,9 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 (fromId, accept) => {
                     setIncomingCall({
                         fromId,
-                        accept: () => {
+                        accept: async () => {
                             setActivePeers(prev => ({ ...prev, [fromId]: { id: fromId, status: 'connecting' } }));
-                            accept();
+                            await accept();
                             setIncomingCall(null);
                         },
                         reject: () => { setIncomingCall(null); }

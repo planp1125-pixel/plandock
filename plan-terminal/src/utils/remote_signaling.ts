@@ -16,7 +16,7 @@ export class RemoteSignaling {
     private ws: WebSocket | null = null;
     private peerConnection: RTCPeerConnection | null = null;
     private onDataChannelCallback: (channel: RTCDataChannel, peerId: string) => void;
-    private onIncomingCallCallback?: (fromId: string, accept: () => void) => void;
+    private onIncomingCallCallback?: (fromId: string, accept: () => Promise<void> | void) => void;
     private onLogCallback?: (msg: string) => void;
     private lastTargetId: string | null = null;
     private isTauriPlatform: boolean = isTauri();
@@ -26,7 +26,7 @@ export class RemoteSignaling {
     constructor(
         myId: string,
         onDataChannel: (channel: RTCDataChannel, peerId: string) => void,
-        onIncomingCall?: (fromId: string, accept: () => void) => void,
+        onIncomingCall?: (fromId: string, accept: () => Promise<void> | void) => void,
         onLog?: (msg: string) => void
     ) {
         this.myId = myId;
