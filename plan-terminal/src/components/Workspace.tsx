@@ -1494,7 +1494,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 }
               } : (connectionType === 'Remote' && remoteChannel) ? async (cmd: string) => {
                 try {
-                  const bytes = new TextEncoder().encode(cmd);
+                  const bytes = new TextEncoder().encode(cmd + '\r\n');
                   const packet = new Uint8Array([0x01, ...bytes]); // 0x01 = Terminal Data
                   remoteChannel.send(packet);
                   addLog(`Sent remote command: ${cmd.trim()}`);
