@@ -527,6 +527,16 @@ pub async fn stop_sharing() -> Result<(), String> {
 }
 
 async fn handle_offer(my_id: String, from: String, sdp: String) {
+    // If an old connection exists for this peer, close it and clear the frontend state first
+    if let Some((_, old_peer)) = SHARE_MANAGER.peers.remove(&from) {
+        println!("[WEBRTC] Cleaning up old connection for {}", from);
+        let _ = old_peer.pc.close().await;
+        if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+            use tauri::Emitter;
+            let _ = ctx.app.emit("remote-peer-disconnected", from.clone());
+        }
+    }
+
     let api = create_webrtc_api();
     let config = create_webrtc_config();
     let pc = Arc::new(api.new_peer_connection(config).await.unwrap());
