@@ -216,6 +216,14 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     refreshPorts();
   }, []);
 
+  useEffect(() => {
+    if (ports.length > 0 && !connected && !isConnecting) {
+      if (!selectedPort || !ports.some(p => p.port_name === selectedPort)) {
+        setSelectedPort(ports[0].port_name);
+      }
+    }
+  }, [ports, selectedPort, connected, isConnecting]);
+
 
 
   useEffect(() => {
@@ -706,8 +714,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
   return (
     <div className="h-full w-full bg-background text-foreground flex flex-col overflow-hidden" style={{ display: isActive ? 'flex' : 'none' }}>
-      <header className="px-3 py-2 border-b flex justify-between items-center bg-card shadow-sm shrink-0">
-        <div className="flex items-center gap-3">
+      <header className="px-3 py-2 border-b flex justify-between items-center flex-wrap gap-2 bg-card shadow-sm shrink-0">
+        <div className="flex items-center flex-wrap gap-2">
 
 
 
@@ -822,7 +830,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         </div>
 
         {/* Connection Settings */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center flex-wrap gap-2 justify-end">
           {/* Connection Type */}
           <div className="flex items-center gap-2 relative">
             {connectionType === 'Remote' ? (
@@ -1240,7 +1248,6 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               </button>
             </div>
           )}
-          <div className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'} ml-2`} />
         </div>
       </header>
 

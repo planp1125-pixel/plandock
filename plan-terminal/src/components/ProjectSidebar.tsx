@@ -74,7 +74,7 @@ function SortableSeqItem({ seq, isActivelySending, onSend, onEdit, onStartPeriod
                         <Play className={`w-3 h-3 fill-current ${isSelectionMode ? 'text-muted-foreground/50' : 'text-green-500'}`} />
                     )}
                     {seq.name}
-                    {seq.group && <span className="ml-1.5 px-1.5 py-[1px] rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[9px] uppercase font-bold tracking-wider">{seq.group}</span>}
+                    {seq.group && <span className="ml-1.5 px-1.5 py-[1px] rounded bg-blue-500/10 text-blue-500 border border-blue-500/20 text-[9px] uppercase font-bold tracking-wider shrink-0" title={`Group: ${seq.group}`}>{seq.group}</span>}
                     {seq.periodic_enabled && <span className="text-xs text-blue-500 ml-1">({seq.periodic_interval}ms)</span>}
                 </div>
                 <div className="text-xs text-muted-foreground truncate">{seq.data || "<empty>"}</div>
@@ -282,7 +282,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
             id: crypto.randomUUID(),
             name: s.name,
             data: s.data,
-            view_mode: s.view_mode as "Hex" | "Ascii" | "Decimal",
+            view_mode: s.view_mode ? (s.view_mode.charAt(0).toUpperCase() + s.view_mode.slice(1).toLowerCase()) as "Hex" | "Ascii" | "Decimal" : "Ascii",
             periodic_enabled: false,
             periodic_interval: 1000,
             group: tmpl.name
@@ -315,7 +315,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                 id: crypto.randomUUID(),
                 name: s.name || "Unnamed",
                 data: s.data || "",
-                view_mode: s.view_mode || "Ascii",
+                view_mode: s.view_mode ? (s.view_mode.charAt(0).toUpperCase() + s.view_mode.slice(1).toLowerCase()) as "Hex" | "Ascii" | "Decimal" : "Ascii",
                 periodic_enabled: false,
                 periodic_interval: 1000,
                 group: groupName

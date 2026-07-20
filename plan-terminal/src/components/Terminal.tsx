@@ -278,7 +278,7 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
         <div className="flex flex-col h-full bg-black text-green-500 font-mono text-sm rounded-lg overflow-hidden border border-border">
             {/* Toolbar */}
             <div className="flex justify-between items-center p-2 bg-zinc-900 border-b border-zinc-800 flex-wrap gap-2">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                     <div className="flex bg-zinc-800 rounded p-0.5 text-xs">
                         <button className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Ascii' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setViewMode('Ascii')}>ASCII</button>
                         <button className={clsx("px-2 py-0.5 rounded text-gray-300", viewMode === 'Hex' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setViewMode('Hex')}>HEX</button>
@@ -293,7 +293,7 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
 
                     <div className="flex items-center gap-1 text-xs">
                         <span className="text-zinc-400 ml-1">Gap:</span>
-                        <input type="number" className="w-10 bg-zinc-800 text-white rounded px-1 py-0.5 text-center no-spinner" value={timestampGap} onChange={(e) => setTimestampGap(Math.max(0, parseInt(e.target.value) || 0))} />
+                        <input type="number" className="w-14 bg-zinc-800 text-white rounded px-1.5 py-0.5 text-center no-spinner border border-zinc-700" value={timestampGap} onChange={(e) => setTimestampGap(Math.max(0, parseInt(e.target.value) || 0))} />
                         <span className="text-zinc-500">ms</span>
                     </div>
 
@@ -302,7 +302,7 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
                         <button className={clsx("px-2 py-0.5 rounded text-gray-300", timestampMode === 'each' ? 'bg-zinc-600 text-white' : 'hover:bg-zinc-700')} onClick={() => setTimestampMode('each')}>Time</button>
                     </div>
                 </div>
-                <div className="flex gap-2 items-center">
+                <div className="flex flex-wrap gap-2 items-center">
                     <label className="flex items-center gap-1 text-xs text-zinc-400 cursor-pointer select-none">
                         <input type="checkbox" checked={stripAnsi} onChange={e => setStripAnsi(e.target.checked)} />
                         Clean

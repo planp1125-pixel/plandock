@@ -6,12 +6,19 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ## [Unreleased]
 
-### Optimized & Fixed (Pending Verification)
+---
+
+## [0.5.7] - 2026-07-19
+
+### Optimized & Fixed
 - **Forced Layout Thrashing (System Freeze/Crash Fix)**: Fixed a serious layout thrashing bug inside the terminal scroll management `useLayoutEffect`. By caching `containerRect` outside the loop and checking visible items only when `autoScroll` is disabled, we eliminated up to 2,000 synchronous reflows per render cycle.
 - **Log List DOM Density optimization**: Reduced DOM render capacity in the terminal viewport from 1000 to 400 entries to optimize React reconciliation performance.
 - **Safety checks on payload**: Added explicit type and existence checks (`Array.isArray`) to incoming message streams to prevent app crashes from corrupt data formats.
 - **High-Speed/Large Data Performance Optimization:** Pre-aggregated incoming serial/TCP/SSH log chunks before updating React state to resolve UI hang/freeze issues under high-throughput data streams.
 - **Terminal Rendering Size Cap:** Enforced a maximum capacity limit of 8000 bytes per individual log entry. This splits massive continuous streams into digestible entries, preventing React from rendering massive single-node updates.
+- **Port Selection Dropdown Fix:** Prevented the UI from automatically changing the port number in the dropdown if the tab is already connected.
+- **Resource Busy Fix:** Added explicit port closing before opening a serial connection to release OS locks and prevent `Resource busy` errors.
+- **TCP/SSH TX Display:** Fixed an issue where data sent via TCP and SSH connections was not being displayed in the terminal as TX data. The backend now correctly emits the transmit events to the frontend.
 
 ---
 

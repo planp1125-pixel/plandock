@@ -296,11 +296,24 @@ impl SshManager {
         Ok(())
     }
 
-    pub fn write_data(&self, tab_id: &str, data: Vec<u8>) -> Result<(), String> {
+    pub fn write_data(&self, app: &AppHandle, tab_id: &str, data: Vec<u8>) -> Result<(), String> {
         let tab = self.get_or_create_tab(tab_id);
         let tx_lock = tab.tx.lock().unwrap();
         if let Some(sender) = tx_lock.as_ref() {
             sender.send(data.clone()).map_err(|e| e.to_string())?;
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let _ = app.emit(
+                "serial-data",
+                (
+                    tab_id.to_string(),
+                    data.clone(),
+                    ts as u64,
+                    "TX".to_string(),
+                ),
+            );
             crate::log_utils::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
             Ok(())
         } else {

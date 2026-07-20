@@ -234,6 +234,7 @@ impl SerialManager {
         tab_id: &str,
         config: SerialConfig,
     ) -> Result<(), String> {
+        self.close_port(tab_id);
         let tab = self.get_or_create_tab(tab_id);
 
         let data_bits = match config.data_bits {

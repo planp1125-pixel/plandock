@@ -280,9 +280,9 @@ fn disconnect_tcp(tcp_manager: State<'_, Arc<TcpManager>>, tab_id: String) {
 }
 
 #[tauri::command]
-fn send_tcp_data(tcp_manager: State<'_, Arc<TcpManager>>, tab_id: String, data: Vec<u8>) -> Result<(), String> {
+fn send_tcp_data(app: AppHandle, tcp_manager: State<'_, Arc<TcpManager>>, tab_id: String, data: Vec<u8>) -> Result<(), String> {
     let final_data = crate::template::evaluate_dynamic_tags(&data);
-    tcp_manager.write_data(&tab_id, final_data)
+    tcp_manager.write_data(&app, &tab_id, final_data)
 }
 
 #[tauri::command]
@@ -321,12 +321,13 @@ fn disconnect_ssh(ssh_manager: State<'_, Arc<SshManager>>, tab_id: String) {
 
 #[tauri::command]
 fn send_ssh_data(
+    app: AppHandle,
     ssh_manager: State<'_, Arc<SshManager>>,
     tab_id: String,
     data: Vec<u8>,
 ) -> Result<(), String> {
     let final_data = crate::template::evaluate_dynamic_tags(&data);
-    ssh_manager.write_data(&tab_id, final_data)
+    ssh_manager.write_data(&app, &tab_id, final_data)
 }
 
 #[tauri::command]

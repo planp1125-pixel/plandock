@@ -680,7 +680,7 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                     if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
                         let tab_id_str: &String = tab_id.value();
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
-                            let _ = ctx.ssh.write_data(tab_id_str, payload.to_vec());
+                            let _ = ctx.ssh.write_data(&ctx.app, tab_id_str, payload.to_vec());
                         }
                     }
                 }

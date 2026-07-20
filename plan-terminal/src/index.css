@@ -88,3 +88,12 @@
     color: #e5e7eb;
   }
 }
+
+/* Hide scrollbars for layout tabs and other elements */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;  /* Firefox */
+}
