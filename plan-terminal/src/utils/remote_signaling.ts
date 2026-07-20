@@ -177,6 +177,31 @@ export class RemoteSignaling {
         console.log(`[WebRTC] Initiating connection to ${targetId}...`);
         this.lastTargetId = targetId;
 
+        // Wait for WebSocket to be open if it's still connecting
+        if (!this.isTauriPlatform) {
+            if (!this.ws) throw new Error("WebSocket not initialized");
+            if (this.ws.readyState !== WebSocket.OPEN) {
+                console.log("[WebRTC] WebSocket not OPEN yet. Waiting...");
+                await new Promise<void>((resolve, reject) => {
+                    const checkInterval = setInterval(() => {
+                        if (this.ws?.readyState === WebSocket.OPEN) {
+                            clearInterval(checkInterval);
+                            resolve();
+                        } else if (this.ws?.readyState === WebSocket.CLOSED || this.ws?.readyState === WebSocket.CLOSING) {
+                            clearInterval(checkInterval);
+                            reject(new Error("WebSocket closed before connection could be established"));
+                        }
+                    }, 100);
+                    // timeout after 10s
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        reject(new Error("Timeout waiting for WebSocket to open"));
+                    }, 10000);
+                });
+                console.log("[WebRTC] WebSocket now OPEN, proceeding with connectTo");
+            }
+        }
+
         if (this.isTauriPlatform) {
             const tabId = "remote-" + Math.random().toString(36).substring(7);
             safeInvoke('connect_remote', { tabId, deviceId: targetId })
