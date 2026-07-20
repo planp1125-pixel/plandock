@@ -100,11 +100,7 @@ pub async fn share_active_tab(tab_id: String, peer_id: String) -> Result<(), Str
                 println!("[WEBRTC] Reusing existing channel '{}' for tab {}", dc.label(), tab_id);
                 dc
             } else {
-                // Fallback: create new channel if none exists
-                println!("[WEBRTC] No existing channel found, creating new one for tab {}", tab_id);
-                let new_dc = peer.pc.create_data_channel(&tab_id, None).await.map_err(|e| e.to_string())?;
-                setup_data_channel(peer_id.clone(), new_dc.clone(), None).await;
-                new_dc
+                return Err("DataChannel not yet established by peer. Waiting...".to_string());
             };
 
             // CRITICAL: Map the channel label to the ACTUAL serial tab

@@ -24,7 +24,20 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
   const handleShareToPeer = async (peerId: string, retryCount = 0) => {
     try {
-      await safeInvoke("share_active_tab", { tabId, peerId });
+      try {
+        await safeInvoke("share_active_tab", { tabId, peerId });
+      } catch (e: any) {
+        if (e && typeof e === 'string' && e.includes('Waiting')) {
+          if (retryCount < 20) {
+            console.warn(`[Remote] Peer ${peerId} channel not ready, retrying sync in 500ms... (${retryCount + 1}/20)`);
+            setTimeout(() => handleShareToPeer(peerId, retryCount + 1), 500);
+          } else {
+            console.error(`[Remote] Gave up waiting for peer ${peerId} channel state.`);
+          }
+          return;
+        }
+        throw e;
+      }
 
       const syncState = (channel: any) => {
         const statePacket = {
@@ -63,7 +76,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         }
       }
     } catch (e) {
-      alert("Sharing failed: " + e);
+      console.error(e);
     }
   };
 
