@@ -34,6 +34,7 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const [debugLogs, setDebugLogs] = useState<string[]>([]);
     const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
     const [activePeers, setActivePeers] = useState<{ [id: string]: any }>({});
+    const [signalingInstance, setSignalingInstance] = useState<RemoteSignaling | null>(null);
 
     const signalingRef = useRef<RemoteSignaling | null>(null);
     const channelRef = useRef<any>(null);
@@ -235,7 +236,7 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             if (!deviceId || !isBackendReady) return;
 
             setSignalingStatus("initializing...");
-            signalingRef.current = new RemoteSignaling(
+            const sig = new RemoteSignaling(
                 deviceId,
                 (channel, peerId) => {
                     addLog(`P2P DataChannel OPEN: ${channel.label} from ${peerId}`);
@@ -267,7 +268,10 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 (msg) => addLog(msg)
             );
 
-            signalingRef.current.startListening().then(c => {
+            signalingRef.current = sig;
+            setSignalingInstance(sig);
+
+            sig.startListening().then(c => {
                 channelRef.current = c;
                 setSignalingStatus("listening");
             }).catch(() => {
@@ -310,7 +314,7 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         <RemoteContext.Provider value={{
             deviceId, isSharing, signalingStatus, debugLogs, incomingCall,
             activePeers,
-            setIncomingCall, toggleSharing, addLog, signaling: signalingRef.current,
+            setIncomingCall, toggleSharing, addLog, signaling: signalingInstance,
             deviceName, setDeviceName
         }}>
             {children}
