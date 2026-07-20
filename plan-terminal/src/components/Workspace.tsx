@@ -17,6 +17,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const { activePeers: contextActivePeers, addLog, isSharing } = useRemote();
   const activePeers = propsActivePeers || contextActivePeers || {};
 
+  const activePeersRef = useRef(activePeers);
+  useEffect(() => {
+    activePeersRef.current = activePeers;
+  }, [activePeers]);
+
   const handleShareToPeer = async (peerId: string, retryCount = 0) => {
     try {
       await safeInvoke("share_active_tab", { tabId, peerId });
@@ -40,7 +45,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       };
 
       // Find the channel for this peer
-      const peer = activePeers[peerId];
+      const currentPeers = activePeersRef.current;
+      const peer = currentPeers[peerId];
       if (peer && (peer.channel || peer.label)) {
         const channelObj = peer.channel || { label: peer.label, readyState: 'open' }; 
         if (channelObj.readyState === 'open') {
@@ -502,9 +508,9 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
     const unlistenTrigger = safeListen<[string, string, number[]]>('remote-sequence-trigger', (event) => {
       const [, , bytes] = event.payload;
-      // bytes should be [seq_id_len, seq_id...]
-      if (bytes.length > 0) {
-        const seqId = new TextDecoder().decode(new Uint8Array(bytes));
+      // bytes should be [0x02, 0x05, ...seq_id]
+      if (bytes.length > 2) {
+        const seqId = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
         const seqToRun = project.send_sequences.find(s => s.id === seqId);
         if (seqToRun) {
           addLog(`Remote Trigger: Executing sequence '${seqToRun.name}'`);
@@ -516,7 +522,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     const unlistenSync = safeListen<[string, string, number[]]>('remote-project-sync', (event) => {
       const [, , bytes] = event.payload;
       try {
-        const payload = new TextDecoder().decode(new Uint8Array(bytes));
+        const payload = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
         const syncData = JSON.parse(payload);
         if (syncData.type === "PROJECT_SYNC") {
           isIncomingSyncRef.current = true;
@@ -682,32 +688,32 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     let bytes: number[] = parseData(seq.data, seq.view_mode);
 
     try {
-      if (remoteChannel) {
-        if (!isTauri()) {
-          // Trigger-Based Execution: Send [0x02, 0x05, ...seqIdBytes]
-          const seqIdBytes = new TextEncoder().encode(seq.id);
-          const payload = new Uint8Array(2 + seqIdBytes.length);
-          payload[0] = 0x02; // Control
-          payload[1] = 0x05; // Trigger
-          payload.set(seqIdBytes, 2);
-          
-          if (typeof remoteChannel.send === 'function') {
-            remoteChannel.send(payload);
-          }
-          // Do not push to local queue immediately, the Host will execute and echo the real TX data back!
-        } else {
-          // Host sending raw data over remote channel
-          const payload = new Uint8Array(1 + bytes.length);
-          payload[0] = 0x01; // Data
-          payload.set(bytes, 1);
-          if (typeof remoteChannel.send === 'function') {
-            remoteChannel.send(payload);
-          } else {
-            // Tauri Rust backend handles the channel
-            await safeInvoke('send_remote_data', { peerId, label: remoteChannel.label, data: Array.from(payload) });
-          }
-          incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
+      if (!isTauri() && remoteChannel) {
+        // WEB VIEWER (Browser) ALWAYS sends over WebRTC, regardless of connectionType
+        const seqIdBytes = new TextEncoder().encode(seq.id);
+        const payload = new Uint8Array(2 + seqIdBytes.length);
+        payload[0] = 0x02; // Control
+        payload[1] = 0x05; // Trigger
+        payload.set(seqIdBytes, 2);
+        
+        if (typeof remoteChannel.send === 'function') {
+          remoteChannel.send(payload);
         }
+        return;
+      }
+
+      if (remoteChannel) {
+        // Host sending raw data over remote channel
+        const payload = new Uint8Array(1 + bytes.length);
+        payload[0] = 0x01; // Data
+        payload.set(bytes, 1);
+        if (typeof remoteChannel.send === 'function') {
+          remoteChannel.send(payload);
+        } else {
+          // Tauri Rust backend handles the channel
+          await safeInvoke('send_remote_data', { peerId, label: remoteChannel.label, data: Array.from(payload) });
+        }
+        incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
       } else if (connectionType === 'Serial') {
         await safeInvoke("send_serial_data", { tabId, data: bytes });
       } else if (connectionType === 'TCP') {
