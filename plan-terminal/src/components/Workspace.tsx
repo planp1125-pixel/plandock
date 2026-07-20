@@ -17,7 +17,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const { activePeers: contextActivePeers, addLog, isSharing } = useRemote();
   const activePeers = propsActivePeers || contextActivePeers || {};
 
-  const handleShareToPeer = async (peerId: string) => {
+  const handleShareToPeer = async (peerId: string, retryCount = 0) => {
     try {
       await safeInvoke("share_active_tab", { tabId, peerId });
 
@@ -49,9 +49,12 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           channelObj.onopen = () => syncState(channelObj);
         }
       } else {
-        // Fallback: wait a moment for the peer to be established in state
-        console.warn(`[Remote] Peer ${peerId} not found in state yet, retrying sync in 500ms...`);
-        setTimeout(() => handleShareToPeer(peerId), 500);
+        if (retryCount < 20) {
+          console.warn(`[Remote] Peer ${peerId} not found in state yet, retrying sync in 500ms... (${retryCount + 1}/20)`);
+          setTimeout(() => handleShareToPeer(peerId, retryCount + 1), 500);
+        } else {
+          console.error(`[Remote] Gave up waiting for peer ${peerId} channel state.`);
+        }
       }
     } catch (e) {
       alert("Sharing failed: " + e);

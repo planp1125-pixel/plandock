@@ -629,6 +629,11 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
         // This allows commands from the Web client to hit the real serial port.
         println!("[WEBRTC] Mapping generic bridge '{}' to 'main' tab on HOST", label);
         DC_TAB_MAP.insert("serial-bridge".to_string(), "main".to_string());
+        
+        // Notify frontend that the bridge is ready
+        if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+            let _ = ctx.app.emit("remote-channel-open", (peer_id.clone(), label.clone()));
+        }
     }
 
     let d_c = Arc::clone(&d);
