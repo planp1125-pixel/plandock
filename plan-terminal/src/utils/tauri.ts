@@ -79,3 +79,48 @@ export async function safeSave(options?: any): Promise<string | null> {
         return null;
     }
 }
+
+/**
+ * Safely opens a URL.
+ */
+export async function safeOpenUrl(url: string): Promise<void> {
+    if (!isTauri()) {
+        window.open(url, "_blank");
+        return;
+    }
+    try {
+        const { openUrl } = await import('@tauri-apps/plugin-opener');
+        await openUrl(url);
+    } catch (e) {
+        console.error("[SafeBridge] Error opening url:", e);
+    }
+}
+
+export async function safeConfirm(message: string, options?: any): Promise<boolean> {
+    if (!isTauri()) {
+        return window.confirm(message);
+    }
+    const { confirm } = await import('@tauri-apps/plugin-dialog');
+    return confirm(message, options);
+}
+
+export async function safeReadTextFile(path: string): Promise<string> {
+    if (!isTauri()) return "";
+    const { readTextFile } = await import('@tauri-apps/plugin-fs');
+    return readTextFile(path);
+}
+
+export async function safeWriteTextFile(path: string, contents: string): Promise<void> {
+    if (!isTauri()) return;
+    const { writeTextFile } = await import('@tauri-apps/plugin-fs');
+    return writeTextFile(path, contents);
+}
+
+export async function safeMessage(msg: string, options?: any): Promise<void> {
+    if (!isTauri()) {
+        alert(msg);
+        return;
+    }
+    const { message } = await import('@tauri-apps/plugin-dialog');
+    await message(msg, options);
+}

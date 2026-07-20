@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { X, Share2, Search, Copy, Check, Globe, Cpu, Wifi, MonitorUp, Zap } from "lucide-react";
 import { supabase } from "../utils/supabase";
 import { useRemote } from "../contexts/RemoteContext";
-import { invoke } from "@tauri-apps/api/core";
+import { safeInvoke } from "../utils/tauri";
 
 export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: boolean; onClose: () => void; activeTabId: string }) {
     const {
@@ -65,7 +65,7 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
 
     const handleShareTab = async (peerId: string) => {
         try {
-            await invoke("share_active_tab", { tabId: activeTabId, peerId });
+            await safeInvoke("share_active_tab", { tabId: activeTabId, peerId });
             addLog(`Shared tab ${activeTabId} with ${peerId}`);
             alert("Tab shared! The remote user should now see your session.");
         } catch (e) {

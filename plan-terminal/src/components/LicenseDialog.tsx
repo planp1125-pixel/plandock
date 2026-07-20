@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useLicense } from '../contexts/LicenseContext';
 import { X, Key, Check, AlertCircle, Crown, ExternalLink } from 'lucide-react';
-import { openUrl } from '@tauri-apps/plugin-opener';
+import { safeOpenUrl } from '../utils/tauri';
 
 interface LicenseDialogProps {
     isOpen: boolean;
@@ -136,7 +136,7 @@ export function LicenseDialog({ isOpen, onClose }: LicenseDialogProps) {
                             <button
                                 onClick={async () => {
                                     try {
-                                        await openUrl('https://planplabs.gumroad.com/l/eblqxg');
+                                        await safeOpenUrl('https://planplabs.gumroad.com/l/eblqxg');
                                     } catch (err) {
                                         console.error('Failed to open link:', err);
                                     }

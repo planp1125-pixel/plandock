@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Workspace } from "./components/Workspace";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { safeInvoke, safeListen } from './utils/tauri';
 import { LicenseDialog } from "./components/LicenseDialog";
 import { LicenseProvider } from "./contexts/LicenseContext";
 import { Moon, Sun, Crown, X, Plus, Share2, Users } from "lucide-react";
@@ -127,7 +126,7 @@ function App() {
     window.addEventListener('remote-channel-open', handleRemoteOpen);
 
     // Listen for mirroring events from Rust (Host side explicitly created tabs)
-    const unlistenCreated = listen<any>('remote-tab-created', (event) => {
+    const unlistenCreatedPromise = safeListen<any>('remote-tab-created', (event) => {
       const [tabId, peerId, portName] = event.payload;
       setTabs(prev => {
         if (prev.find(t => t.id === tabId)) return prev;
@@ -144,7 +143,7 @@ function App() {
 
     return () => {
       window.removeEventListener('remote-channel-open', handleRemoteOpen);
-      unlistenCreated.then(u => u());
+      unlistenCreatedPromise.then(u => { if (u) u(); });
     };
   }, []);
 
@@ -185,9 +184,9 @@ function App() {
       tab.remoteChannel.close();
     } else {
       try {
-        await invoke("close_serial_port", { tabId: id });
-        await invoke("disconnect_tcp", { tabId: id });
-        await invoke("disconnect_ssh", { tabId: id });
+        await safeInvoke("close_serial_port", { tabId: id });
+        await safeInvoke("disconnect_tcp", { tabId: id });
+        await safeInvoke("disconnect_ssh", { tabId: id });
       } catch (err) {
         console.error("Cleanup failed for tab", id, err);
       }

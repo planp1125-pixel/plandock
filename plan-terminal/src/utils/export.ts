@@ -1,6 +1,4 @@
-import { save, message } from '@tauri-apps/plugin-dialog';
-import { writeTextFile } from '@tauri-apps/plugin-fs';
-import { invoke } from '@tauri-apps/api/core';
+import { safeInvoke, safeSave, safeWriteTextFile, safeMessage } from './tauri';
 import { LogEntry } from '../components/Terminal';
 
 const CONTROL_CHAR_NAMES: Record<number, string> = {
@@ -89,7 +87,7 @@ export async function handleTerminalExport(
         const anyFormatSelected = opts.exportAscii || opts.exportHex || opts.exportBin || opts.exportDec;
 
         if (anyFormatSelected) {
-            const path = await save({
+            const path = await safeSave({
                 filters: [{ name: 'Log Files', extensions: ['log', 'txt'] }],
                 defaultPath: `plan_terminal_log_${Date.now()}.log`
             });
@@ -101,39 +99,39 @@ export async function handleTerminalExport(
 
             if (opts.exportAscii) {
                 const text = exportLogs.map(l => formatLogLine(l, 'ascii')).join('\n') + limitNotice;
-                await invoke('write_file_direct', { path: `${basePath}_ascii${ext}`, content: text });
+                await safeInvoke('write_file_direct', { path: `${basePath}_ascii${ext}`, content: text });
                 savedFiles.push('ASCII');
             }
             if (opts.exportHex) {
                 const text = exportLogs.map(l => formatLogLine(l, 'hex')).join('\n') + limitNotice;
-                await invoke('write_file_direct', { path: `${basePath}_hex${ext}`, content: text });
+                await safeInvoke('write_file_direct', { path: `${basePath}_hex${ext}`, content: text });
                 savedFiles.push('HEX');
             }
             if (opts.exportBin) {
                 const text = exportLogs.map(l => formatLogLine(l, 'bin')).join('\n') + limitNotice;
-                await invoke('write_file_direct', { path: `${basePath}_bin${ext}`, content: text });
+                await safeInvoke('write_file_direct', { path: `${basePath}_bin${ext}`, content: text });
                 savedFiles.push('BIN');
             }
             if (opts.exportDec) {
                 const text = exportLogs.map(l => formatLogLine(l, 'dec')).join('\n') + limitNotice;
-                await invoke('write_file_direct', { path: `${basePath}_dec${ext}`, content: text });
+                await safeInvoke('write_file_direct', { path: `${basePath}_dec${ext}`, content: text });
                 savedFiles.push('DEC');
             }
 
-            await message(`Saved ${savedFiles.join(', ')} logs as separate files`, { title: 'Export Complete', kind: 'info' });
+            await safeMessage(`Saved ${savedFiles.join(', ')} logs as separate files`, { title: 'Export Complete', kind: 'info' });
         } else {
             const text = exportLogs.map(l => formatLogLine(l, 'combined')).join('\n') + limitNotice;
-            const path = await save({
+            const path = await safeSave({
                 filters: [{ name: 'Text Files', extensions: ['txt'] }],
                 defaultPath: `plan_terminal_log_${Date.now()}.txt`
             });
             if (path) {
-                await writeTextFile(path, text);
-                await message('Log saved successfully', { title: 'Success', kind: 'info' });
+                await safeWriteTextFile(path, text);
+                await safeMessage('Log saved successfully', { title: 'Success', kind: 'info' });
             }
         }
     } catch (error) {
         console.error('Failed to export logs:', error);
-        await message(`Failed to save file: ${error}`, { title: 'Error', kind: 'error' });
+        await safeMessage(`Failed to save file: ${error}`, { title: 'Error', kind: 'error' });
     }
 }

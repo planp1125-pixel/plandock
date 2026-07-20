@@ -1,8 +1,6 @@
 import { Project, Sequence, Reaction } from "../types";
 import { Plus, Save, Play, Upload, Edit, FastForward, Square, GripVertical, BookOpen, CheckSquare, Trash2, Search, FileDown, FileUp } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
-import { save, open, confirm } from '@tauri-apps/plugin-dialog';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { safeInvoke, safeOpen, safeSave, safeConfirm, safeReadTextFile, safeWriteTextFile } from '../utils/tauri';
 import { useState, useRef, useEffect } from "react";
 import {
     DndContext,
@@ -212,7 +210,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
         try {
             if (project.file_path) {
                 // If we already have a file path, just save directly without prompting
-                await invoke("save_project_file", { path: project.file_path, project });
+                await safeInvoke("save_project_file", { path: project.file_path, project });
 
                 // Show a quick, non-intrusive toast notification
                 setSaveToast("Saved!");
@@ -229,7 +227,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
 
     const handleSaveAs = async () => {
         try {
-            const path = await save({
+            const path = await safeSave({
                 filters: [{ name: 'Plan Terminal Project', extensions: ['plant', 'json'] }]
             });
             if (!path) return;
@@ -240,7 +238,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
             }
 
             const updatedProject = { ...project, file_path: finalPath };
-            await invoke("save_project_file", { path: finalPath, project: updatedProject });
+            await safeInvoke("save_project_file", { path: finalPath, project: updatedProject });
             onUpdate(updatedProject); // Update local state with the new file_path
             alert("Project saved successfully to " + finalPath);
         } catch (e) {
@@ -251,18 +249,19 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
 
     const handleLoad = async () => {
         try {
-            const path = await open({
+            const pathRes = await safeOpen({
                 filters: [
                     { name: 'All Supported Files', extensions: ['plant', 'json', 'ptp'] }
                 ]
             });
-            if (!path) return;
+            if (!pathRes) return;
+            const path = Array.isArray(pathRes) ? pathRes[0] : pathRes;
 
             let loaded: Project;
             if (path.toLowerCase().endsWith('.ptp')) {
-                loaded = await invoke<Project>("import_docklight_file", { path });
+                loaded = await safeInvoke<Project>("import_docklight_file", { path });
             } else {
-                loaded = await invoke<Project>("load_project_file", { path });
+                loaded = await safeInvoke<Project>("load_project_file", { path });
             }
 
             // Auto-fix legacy default names
@@ -298,11 +297,12 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
 
     const importCustomGroup = async () => {
         try {
-            const path = await open({
+            const pathRes = await safeOpen({
                 filters: [{ name: 'Plan Template', extensions: ['plantpl', 'json'] }]
             });
-            if (!path) return;
-            const content = await readTextFile(path);
+            if (!pathRes) return;
+            const path = Array.isArray(pathRes) ? pathRes[0] : pathRes;
+            const content = await safeReadTextFile(path);
             const parsed = JSON.parse(content);
             if (!parsed.sequences || !Array.isArray(parsed.sequences)) {
                 alert("Invalid template format.");
@@ -451,7 +451,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                             <button
                                 className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs flex items-center gap-1.5 font-medium transition-colors"
                                 onClick={async () => {
-                                    const path = await save({
+                                    const path = await safeSave({
                                         filters: [{ name: 'Plan Template', extensions: ['plantpl', 'json'] }],
                                         defaultPath: 'custom_group.plantpl'
                                     });
@@ -466,7 +466,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                                         }))
                                     };
                                     try {
-                                        await writeTextFile(path, JSON.stringify(exportData, null, 2));
+                                        await safeWriteTextFile(path, JSON.stringify(exportData, null, 2));
                                         alert("Group exported successfully!");
                                         setIsSelectionMode(false);
                                         setSelectedSeqIds(new Set());
@@ -481,7 +481,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                             <button
                                 className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs flex items-center gap-1.5 font-medium transition-colors"
                                 onClick={async () => {
-                                const yes = await confirm(`Delete ${selectedSeqIds.size} sequence(s)?`, { title: 'Confirm Deletion', kind: 'warning' });
+                                const yes = await safeConfirm(`Delete ${selectedSeqIds.size} sequence(s)?`, { title: 'Confirm Deletion', kind: 'warning' });
                                 if (yes) {
                                     const filtered = project.send_sequences.filter(s => !selectedSeqIds.has(s.id));
                                     onUpdate({ ...project, send_sequences: filtered });
@@ -567,7 +567,7 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
                         <button
                             className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded text-xs flex items-center gap-1.5 font-medium transition-colors"
                             onClick={async () => {
-                                const yes = await confirm(`Delete ${selectedReactionIds.size} rule(s)?`, { title: 'Confirm Deletion', kind: 'warning' });
+                                const yes = await safeConfirm(`Delete ${selectedReactionIds.size} rule(s)?`, { title: 'Confirm Deletion', kind: 'warning' });
                                 if (yes) {
                                     const filtered = project.reactions.filter(r => !selectedReactionIds.has(r.id));
                                     onUpdate({ ...project, reactions: filtered });
