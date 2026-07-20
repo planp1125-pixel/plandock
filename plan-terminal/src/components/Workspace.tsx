@@ -508,9 +508,9 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
     const unlistenTrigger = safeListen<[string, string, number[]]>('remote-sequence-trigger', (event) => {
       const [, , bytes] = event.payload;
-      // bytes should be [0x02, 0x05, ...seq_id]
-      if (bytes.length > 2) {
-        const seqId = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
+      // bytes is [0x05, ...seq_id] from Rust handle_control_message
+      if (bytes.length > 1) {
+        const seqId = new TextDecoder().decode(new Uint8Array(bytes.slice(1)));
         const seqToRun = project.send_sequences.find(s => s.id === seqId);
         if (seqToRun) {
           addLog(`Remote Trigger: Executing sequence '${seqToRun.name}'`);
@@ -522,7 +522,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     const unlistenSync = safeListen<[string, string, number[]]>('remote-project-sync', (event) => {
       const [, , bytes] = event.payload;
       try {
-        const payload = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
+        // bytes is [0x04, ...json] from Rust handle_control_message
+        const payload = new TextDecoder().decode(new Uint8Array(bytes.slice(1)));
         const syncData = JSON.parse(payload);
         if (syncData.type === "PROJECT_SYNC") {
           isIncomingSyncRef.current = true;
