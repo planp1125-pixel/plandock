@@ -654,33 +654,17 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
             let msg_type = msg.data[0];
             let payload = &msg.data[1..];
             match msg_type {
-                0x01 => { // Serial Data from remote
-                    let label = d_inner.label();
-                    println!("[WEBRTC] Incoming remote data on channel '{}'", label);
-                    
-                    if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
-                        let tab_id_str: &String = tab_id.value();
-                        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
-                        let event_payload = (tab_id_str.clone(), payload.to_vec(), ts as u64, "RX".to_string());
-                        
-                        let mut emitted = false;
-                        if let Some(app) = app_val.as_ref() {
-                            let _ = app.emit("serial-data", event_payload.clone());
-                            emitted = true;
-                        }
-
+                0x01 => { // Terminal Data (Viewer -> Host -> Port)
+                    let map_lock = DC_TAB_MAP.iter().find(|pair| pair.key() == d_inner.label()).map(|pair| pair.value().clone());
+                    if let Some(tab_id) = map_lock {
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
-                            println!("[WEBRTC] Routing data to tab {}", tab_id_str);
-                            if !emitted {
-                                let _ = ctx.app.emit("serial-data", event_payload);
-                            }
                             // Only HOST should write to physical serial. Clients have "remote-x" tab IDs which won't write properly if they don't own it.
-                            if label != "serial-bridge" {
-                                let _ = ctx.serial.write_data(&ctx.app, tab_id_str, payload.to_vec(), "TX_REMOTE");
+                            if !tab_id.starts_with("remote-") {
+                                let _ = ctx.serial.write_data(&ctx.app, &tab_id, payload.to_vec(), "TX_REMOTE");
                             }
                         }
                     } else {
-                        println!("[WEBRTC] WARNING: No tab mapped for channel '{}'. DC_TAB_MAP dump: {:?}", label, DC_TAB_MAP.iter().map(|kv| kv.key().clone()).collect::<Vec<_>>());
+                        println!("[WEBRTC] WARNING: No tab mapped for channel '{}'. DC_TAB_MAP dump: {:?}", d_inner.label(), DC_TAB_MAP.iter().map(|kv| kv.key().clone()).collect::<Vec<_>>());
                     }
                 }
                 0x02 => { // Control

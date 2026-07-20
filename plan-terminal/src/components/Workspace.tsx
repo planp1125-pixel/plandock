@@ -118,8 +118,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
 
   // Refs for Chart to access latest state in listeners
-  const chartConfigsRef = useRef<ChartConfig[]>([]);
+  const chartConfigsRef = useRef<ChartConfig[]>(project.chart_configs);
   const chartDataQueue = useRef<ChartDataPoint[]>([]);
+
+  const projectRef = useRef(project);
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
 
   // Playback State
   const [isPlayingBack, setIsPlayingBack] = useState(false);
@@ -524,7 +529,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       // bytes is [0x05, ...seq_id] from Rust handle_control_message
       if (bytes.length > 1) {
         const seqId = new TextDecoder().decode(new Uint8Array(bytes.slice(1)));
-        const seqToRun = project.send_sequences.find(s => s.id === seqId);
+        const seqToRun = projectRef.current.send_sequences.find(s => s.id === seqId);
         if (seqToRun) {
           addLog(`Remote Trigger: Executing sequence '${seqToRun.name}'`);
           handleSend(seqToRun);
