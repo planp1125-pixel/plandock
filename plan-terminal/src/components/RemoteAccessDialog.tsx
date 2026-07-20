@@ -84,7 +84,7 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
     const [linkCopied, setLinkCopied] = useState(false);
     const copyWebLink = () => {
         if (deviceId) {
-            const url = `https://plan-terminal.vercel.app/?id=${deviceId}`;
+            const url = `https://plan-terminal-cloud.vercel.app/?id=${deviceId}`;
             navigator.clipboard.writeText(url);
             setLinkCopied(true);
             setTimeout(() => setLinkCopied(false), 2000);
