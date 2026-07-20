@@ -793,6 +793,20 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                 DC_TAB_MAP.insert(d.label().to_owned(), tab_id);
             }
         }
+        0x04 => { // Project State Sync (Viewer -> Host)
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let payload_vec = payload.to_vec();
+                let _ = ctx.app.emit("remote-project-sync", (peer_id, d.label().to_owned(), payload_vec));
+            }
+        }
+        0x05 => { // Trigger Sequence (Viewer -> Host)
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let payload_vec = payload.to_vec();
+                let _ = ctx.app.emit("remote-sequence-trigger", (peer_id, d.label().to_owned(), payload_vec));
+            }
+        }
         _ => {}
     }
 }

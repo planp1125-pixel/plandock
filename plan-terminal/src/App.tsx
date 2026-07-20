@@ -10,8 +10,9 @@ import logo from "./assets/logo.png";
 import { RemoteAccessDialog } from "./components/RemoteAccessDialog";
 import "./index.css";
 
-
 import { useRemote } from "./contexts/RemoteContext";
+import { isTauri } from "./utils/tauri";
+import { useRef } from "react";
 
 interface Tab {
   id: string;
@@ -24,7 +25,7 @@ interface Tab {
 }
 
 function App() {
-  const { incomingCall, isSharing, deviceName, activePeers } = useRemote();
+  const { incomingCall, isSharing, deviceName, activePeers, signaling, deviceId } = useRemote();
   const [tabs, setTabs] = useState<Tab[]>([{ id: 'main', name: 'New Project', connected: false, connLabel: '', type: 'Serial' }]);
   const [activeTabId, setActiveTabId] = useState('main');
 
@@ -40,6 +41,31 @@ function App() {
     return saved !== null ? saved === 'true' : true;
   });
 
+  const [isWebViewer, setIsWebViewer] = useState(false);
+  const [webTargetId, setWebTargetId] = useState<string | null>(null);
+  const hasConnected = useRef(false);
+
+  useEffect(() => {
+    if (isTauri()) return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const targetId = searchParams.get('id');
+    if (targetId) {
+      setIsWebViewer(true);
+      setWebTargetId(targetId);
+      // Ensure we start with a clean remote tab rather than 'New Project'
+      setTabs([{ id: 'remote-init', name: `Connecting to ${targetId}...`, connected: false, connLabel: '', type: 'Remote' }]);
+      setActiveTabId('remote-init');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isWebViewer && webTargetId && signaling && deviceId && !hasConnected.current) {
+      hasConnected.current = true;
+      console.log("[WebViewer] Auto-connecting to:", webTargetId);
+      signaling.connectTo(webTargetId).catch(e => console.error("WebConnect error", e));
+    }
+  }, [isWebViewer, webTargetId, signaling, deviceId]);
+
   // Listen for global remote channel events
   useEffect(() => {
     const handleRemoteOpen = (e: any) => {
@@ -48,6 +74,18 @@ function App() {
       console.log(`[App] Remote DataChannel OPEN: ${label} from ${fromId}`);
 
       setTabs(prev => {
+        if (isWebViewer) {
+          return [{
+            id: fromId,
+            name: `Remote: ${fromId}`,
+            connected: true,
+            connLabel: label,
+            type: 'Remote',
+            remoteChannel: channel,
+            peerId: fromId
+          }];
+        }
+
         // If it's a specific shared tab (e.g. serial-xxx)
         if (label.startsWith('serial-') || label.startsWith('ssh-') || label.startsWith('remote-')) {
           const existing = prev.find(t => t.id === label);
@@ -81,8 +119,8 @@ function App() {
         }];
       });
 
-      if (label.startsWith('serial-') || label.startsWith('ssh-')) {
-        setActiveTabId(label);
+      if (isWebViewer || label.startsWith('serial-') || label.startsWith('ssh-')) {
+        setActiveTabId(isWebViewer ? fromId : label);
       }
     };
 
@@ -212,33 +250,44 @@ function App() {
           </div>
 
           <div className="flex items-end h-full pb-1 pl-2">
-            <button
-              type="button"
-              className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors shrink-0 outline-none focus:outline-none focus:ring-0"
-              onClick={addTab}
-              title="New Tab"
-            >
-              <Plus className="w-4 h-4 pointer-events-none" />
-            </button>
+            {!isWebViewer && (
+              <button
+                type="button"
+                className="w-7 h-7 flex items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors shrink-0 outline-none focus:outline-none focus:ring-0"
+                onClick={addTab}
+                title="New Tab"
+              >
+                <Plus className="w-4 h-4 pointer-events-none" />
+              </button>
+            )}
           </div>
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          {isWebViewer && (
+            <div className="px-2 py-0.5 bg-blue-500/10 text-blue-500 rounded border border-blue-500/20 text-[10px] font-bold uppercase tracking-wider mr-2">
+              Web Remote Mode
+            </div>
+          )}
           <button onClick={toggleDarkMode} className="p-1.5 hover:bg-accent rounded outline-none" title="Toggle Theme">
             {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
-          <button onClick={() => setShowLicenseDialog(true)} className="p-1.5 hover:bg-accent rounded text-amber-500 outline-none" title="License Pro">
-            <Crown className="w-4 h-4" />
-          </button>
-          <div className="w-px h-4 bg-border mx-1" />
-          <button
-            onClick={() => setShowRemoteDialog(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/30 rounded-md transition-all text-[11px] font-bold uppercase tracking-tight"
-            title="Remote Access & Sharing"
-          >
-            <Share2 className="w-3.5 h-3.5" />
-            Remote
-          </button>
+          {!isWebViewer && (
+            <>
+              <button onClick={() => setShowLicenseDialog(true)} className="p-1.5 hover:bg-accent rounded text-amber-500 outline-none" title="License Pro">
+                <Crown className="w-4 h-4" />
+              </button>
+              <div className="w-px h-4 bg-border mx-1" />
+              <button
+                onClick={() => setShowRemoteDialog(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 border border-blue-500/30 rounded-md transition-all text-[11px] font-bold uppercase tracking-tight"
+                title="Remote Access & Sharing"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                Remote
+              </button>
+            </>
+          )}
         </div>
       </header>
 

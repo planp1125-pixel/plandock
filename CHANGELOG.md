@@ -8,6 +8,18 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.8] - 2026-07-20
+
+### Added
+- **Remote Web Viewer Mode**: Enables remote engineers to monitor and control physical serial devices through a browser-based, zero-install interface at `plan-terminal.vercel.app/?id=[DEVICE_ID]`.
+- **Project State Auto-Sync**: `.plant` configurations (Sequences, Rules, Charts) now automatically synchronize between the Host desktop and remote Web Viewers over WebRTC.
+- **Trigger-Based Precision Execution**: Remote browser inputs do not send raw data over the internet; they send a lightweight `0x11/0x05` trigger. The Host receives the trigger and executes the sequence locally, bypassing network latency for precise hardware timing.
+
+### Changed
+- Refactored `Workspace.tsx` connection panel to seamlessly adapt and hide desktop-specific menus when operating in Web Viewer mode.
+
+---
+
 ## [0.5.7] - 2026-07-19
 
 ### Optimized & Fixed

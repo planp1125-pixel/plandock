@@ -108,6 +108,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     chartConfigsRef.current = chartConfigs;
   }, [chartConfigs]);
 
+  const isIncomingSyncRef = useRef(false);
+
   // Port selection state (lifted to header)
   const [ports, setPorts] = useState<PortInfo[]>([]);
   const [selectedPort, setSelectedPort] = useState("");
@@ -294,7 +296,15 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     return () => clearInterval(interval);
   }, []);
 
-  const [connectionType, setConnectionType] = useState<'Serial' | 'TCP' | 'SSH' | 'Remote'>('Serial');
+  const [connectionType, setConnectionType] = useState<'Serial' | 'TCP' | 'SSH' | 'Remote'>(
+    !isTauri() || remoteChannel ? 'Remote' : 'Serial'
+  );
+
+  useEffect(() => {
+    if (!isTauri() || remoteChannel) {
+      setConnectionType('Remote');
+    }
+  }, [remoteChannel]);
   const [remoteDeviceId, setRemoteDeviceId] = useState('');
 
   // Handle Remote DataChannel
@@ -487,6 +497,38 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       alert("SSH Connection closed.");
     });
 
+    const unlistenTrigger = safeListen<[string, string, number[]]>('remote-sequence-trigger', (event) => {
+      const [, , bytes] = event.payload;
+      // bytes should be [seq_id_len, seq_id...]
+      if (bytes.length > 0) {
+        const seqId = new TextDecoder().decode(new Uint8Array(bytes));
+        const seqToRun = project.send_sequences.find(s => s.id === seqId);
+        if (seqToRun) {
+          addLog(`Remote Trigger: Executing sequence '${seqToRun.name}'`);
+          handleSend(seqToRun);
+        }
+      }
+    });
+
+    const unlistenSync = safeListen<[string, string, number[]]>('remote-project-sync', (event) => {
+      const [, , bytes] = event.payload;
+      try {
+        const payload = new TextDecoder().decode(new Uint8Array(bytes));
+        const syncData = JSON.parse(payload);
+        if (syncData.type === "PROJECT_SYNC") {
+          isIncomingSyncRef.current = true;
+          setProject(syncData.project);
+          if (syncData.connectionType) {
+            setConnectionType(syncData.connectionType);
+            setRemoteDeviceId(syncData.deviceName || 'Remote Host');
+          }
+          addLog("Project state synced from Web Viewer.");
+        }
+      } catch (e) {
+        console.error("Failed to parse project sync:", e);
+      }
+    });
+
     const unlistenPlaybackStart = safeListen<string>('playback-started', (event) => {
       if (event.payload !== tabId) return;
       setLogs([]);
@@ -508,6 +550,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       unlistenSshDisconnect.then(f => f());
       unlistenPlaybackStart.then(f => f());
       unlistenPlaybackEnded.then(f => f());
+      unlistenTrigger.then(f => f());
+      unlistenSync.then(f => f());
     };
   }, []);
 
@@ -561,6 +605,39 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     return () => window.removeEventListener('trigger-tab-share', handleTrigger);
   }, [isActive, tabId, project, connectionType]);
 
+  // Project Sync Broadcaster
+  useEffect(() => {
+    if (isIncomingSyncRef.current) {
+      isIncomingSyncRef.current = false;
+      return;
+    }
+
+    const syncData = {
+      type: "PROJECT_SYNC",
+      project: project,
+      connectionType: connectionType,
+      deviceName: localStorage.getItem('remote-device-name') || 'Remote Host'
+    };
+    const payloadBytes = new TextEncoder().encode(JSON.stringify(syncData));
+    const payload = new Uint8Array(2 + payloadBytes.length);
+    payload[0] = 0x02; // Control
+    payload[1] = 0x04; // Project Sync
+    payload.set(payloadBytes, 2);
+
+    if (!isTauri() && remoteChannel) {
+      // Web Viewer syncing edits back to Host
+      if (typeof remoteChannel.send === 'function') {
+        remoteChannel.send(payload);
+      }
+    } else if (isTauri() && isSharing && activePeers && Object.keys(activePeers).length > 0) {
+      // Host broadcasting state to all peers
+      Object.keys(activePeers).forEach(pid => {
+        safeInvoke('send_remote_data', { peerId: pid, label: 'serial-bridge', data: Array.from(payload) })
+          .catch(e => console.error("Sync failed:", e));
+      });
+    }
+  }, [project, connectionType]);
+
   const [activePeriodicIds, setActivePeriodicIds] = useState<Set<string>>(new Set());
 
   const startPeriodic = (seq: Sequence) => {
@@ -603,14 +680,30 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
     try {
       if (remoteChannel) {
-        const payload = new Uint8Array(1 + bytes.length);
-        payload[0] = 0x01; // Data
-        payload.set(bytes, 1);
-        if (typeof remoteChannel.send === 'function') {
-          remoteChannel.send(payload);
+        if (!isTauri()) {
+          // Trigger-Based Execution: Send [0x02, 0x05, ...seqIdBytes]
+          const seqIdBytes = new TextEncoder().encode(seq.id);
+          const payload = new Uint8Array(2 + seqIdBytes.length);
+          payload[0] = 0x02; // Control
+          payload[1] = 0x05; // Trigger
+          payload.set(seqIdBytes, 2);
+          
+          if (typeof remoteChannel.send === 'function') {
+            remoteChannel.send(payload);
+          }
+          // Do not push to local queue immediately, the Host will execute and echo the real TX data back!
         } else {
-          // Tauri Rust backend handles the channel
-          await safeInvoke('send_remote_data', { peerId, label: remoteChannel.label, data: Array.from(payload) });
+          // Host sending raw data over remote channel
+          const payload = new Uint8Array(1 + bytes.length);
+          payload[0] = 0x01; // Data
+          payload.set(bytes, 1);
+          if (typeof remoteChannel.send === 'function') {
+            remoteChannel.send(payload);
+          } else {
+            // Tauri Rust backend handles the channel
+            await safeInvoke('send_remote_data', { peerId, label: remoteChannel.label, data: Array.from(payload) });
+          }
+          incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
         }
       } else if (connectionType === 'Serial') {
         await safeInvoke("send_serial_data", { tabId, data: bytes });
@@ -622,12 +715,6 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           sshBytes.push(10); // Append LF (\n)
         }
         await safeInvoke("send_ssh_data", { tabId, data: sshBytes });
-      }
-      
-      // In web mode or remote, we need to push it manually because there's no Rust backend echoing it.
-      // But in local Tauri mode, the Rust backend evaluates dynamic templates and echoes the final data back.
-      if (!isTauri() || remoteChannel) {
-        incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
       }
     } catch (e) {
       console.error(e);

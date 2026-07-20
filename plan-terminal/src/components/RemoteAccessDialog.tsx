@@ -81,6 +81,16 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
         }
     };
 
+    const [linkCopied, setLinkCopied] = useState(false);
+    const copyWebLink = () => {
+        if (deviceId) {
+            const url = `https://plan-terminal.vercel.app/?id=${deviceId}`;
+            navigator.clipboard.writeText(url);
+            setLinkCopied(true);
+            setTimeout(() => setLinkCopied(false), 2000);
+        }
+    };
+
     if (!isOpen) return null;
 
     const peersList = Object.values(activePeers);
@@ -123,11 +133,20 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
                                         <span className={`text-[10px] font-medium ${signalingStatus === 'listening' ? 'text-green-500' : 'text-red-500'}`}>{signalingStatus === 'listening' ? 'Active' : signalingStatus.toUpperCase()}</span>
                                     </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                    <code className="flex-1 bg-background border px-3 py-2 rounded text-xl font-mono text-center tracking-[0.2em] shadow-inner">{deviceId || "Assigning..."}</code>
-                                    <button onClick={copyId} className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shadow-lg">{copied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}</button>
+                                <div className="flex flex-col gap-2 mt-2">
+                                    <div className="flex items-center gap-2">
+                                        <code className="flex-1 bg-background border px-3 py-2 rounded text-xl font-mono text-center tracking-[0.2em] shadow-inner">{deviceId || "Assigning..."}</code>
+                                        <button onClick={copyId} className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors shadow-lg" title="Copy ID">{copied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}</button>
+                                    </div>
+                                    <button 
+                                        onClick={copyWebLink} 
+                                        className="w-full py-2 bg-white text-blue-600 hover:bg-zinc-100 rounded text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-md transition-colors"
+                                    >
+                                        <Globe className="w-4 h-4" />
+                                        {linkCopied ? "Link Copied to Clipboard!" : "Copy Web Viewer Link"}
+                                    </button>
                                 </div>
-                                <input type="text" value={deviceName} onChange={(e) => setDeviceName(e.target.value)} placeholder="Display Name (e.g. My PC)" className="w-full bg-background border rounded px-3 py-2 text-[11px] outline-none focus:ring-1 focus:ring-blue-500" />
+                                <input type="text" value={deviceName} onChange={(e) => setDeviceName(e.target.value)} placeholder="Display Name (e.g. My PC)" className="w-full bg-background border rounded px-3 py-2 text-[11px] outline-none focus:ring-1 focus:ring-blue-500 mt-2" />
                             </div>
                         )}
                     </div>
