@@ -8,6 +8,15 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.9] - 2026-07-21
+
+### Fixed
+- **WebRTC Directionality Sync**: Fixed an issue where the remote web viewer and remote desktop clients would improperly display locally transmitted data (TX) as received data (RX).
+- **Desktop-to-Desktop Remote Data Parsing**: Corrected a bug where raw WebRTC terminal data lacked a direction byte when sent between desktop applications, causing data corruption and improper serial logging.
+- **Remote SSH Channel Identification**: Fixed SSH payloads being improperly broadcasted as serial payloads over WebRTC in Remote Mode.
+
+---
+
 ## [0.5.8] - 2026-07-20
 
 ### Added

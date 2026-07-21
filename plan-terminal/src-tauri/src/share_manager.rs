@@ -141,10 +141,10 @@ pub async fn share_active_tab(tab_id: String, peer_id: String) -> Result<(), Str
 }
 
 /// Broadcast binary data to all active DataChannels
-pub async fn broadcast_remote_data(label: String, data: Vec<u8>) {
-    // [0x01 = Serial Data, 0x00 = RX direction, ...bytes]
+pub async fn broadcast_remote_data(label: String, data: Vec<u8>, direction: u8) {
+    // [0x01 = Serial Data, direction = (1 for TX, 0 for RX), ...bytes]
     // Web app's onmessage handler expects: [type, dir_byte, ...bytes]
-    let mut payload = vec![0x01, 0x00];
+    let mut payload = vec![0x01, direction];
     payload.extend_from_slice(&data);
 
     for kv in SHARE_MANAGER.peers.iter() {
@@ -655,12 +655,17 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
             let payload = &msg.data[1..];
             match msg_type {
                 0x01 => { // Terminal Data (Viewer -> Host -> Port)
+                    // The payload format is [0x01, direction_byte, ...data]
+                    // We need to skip the direction_byte before writing to the port.
+                    if msg.data.len() < 2 { return; }
+                    let actual_payload = &msg.data[2..];
+                    
                     let map_lock = DC_TAB_MAP.iter().find(|pair| pair.key() == d_inner.label()).map(|pair| pair.value().clone());
                     if let Some(tab_id) = map_lock {
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
                             // Only HOST should write to physical serial. Clients have "remote-x" tab IDs which won't write properly if they don't own it.
                             if !tab_id.starts_with("remote-") {
-                                let _ = ctx.serial.write_data(&ctx.app, &tab_id, payload.to_vec(), "TX_REMOTE");
+                                let _ = ctx.serial.write_data(&ctx.app, &tab_id, actual_payload.to_vec(), "TX_REMOTE");
                             }
                         }
                     } else {
@@ -671,11 +676,15 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                     handle_control_message(pid, d_inner, payload).await;
                 }
                 0x03 => { // SSH Data from remote
+                    // The payload format is [0x03, direction_byte, ...data]
+                    if msg.data.len() < 2 { return; }
+                    let actual_payload = &msg.data[2..];
+                    
                     let label = d_inner.label();
                     if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
                         let tab_id_str: &String = tab_id.value();
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
-                            let _ = ctx.ssh.write_data(&ctx.app, tab_id_str, payload.to_vec());
+                            let _ = ctx.ssh.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
                         }
                     }
                 }
@@ -720,8 +729,10 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                     
                     ctx.app.listen("serial-data", move |event| {
                         if let Ok(payload) = serde_json::from_str::<SerialEventPayload>(event.payload()) {
-                            if payload.0 == tab_id_inner && payload.3 == "RX" {
+                            if payload.0 == tab_id_inner {
                                 let mut packet = vec![0x01]; // Serial Data Type
+                                let dir_byte = if payload.3.starts_with("TX") { 1u8 } else { 0u8 };
+                                packet.push(dir_byte);
                                 packet.extend_from_slice(&payload.1);
                                 let dc = d_c.clone();
                                 tokio::spawn(async move {
@@ -762,8 +773,10 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                     let tab_id_inner = tab_id.clone();
                     ctx.app.listen("serial-data", move |event| {
                         if let Ok(payload) = serde_json::from_str::<SerialEventPayload>(event.payload()) {
-                            if payload.0 == tab_id_inner && payload.3 == "RX" {
+                            if payload.0 == tab_id_inner {
                                 let mut packet = vec![0x03]; // SSH Data Type
+                                let dir_byte = if payload.3.starts_with("TX") { 1u8 } else { 0u8 };
+                                packet.push(dir_byte);
                                 packet.extend_from_slice(&payload.1);
                                 let dc = d_c.clone();
                                 tokio::spawn(async move {

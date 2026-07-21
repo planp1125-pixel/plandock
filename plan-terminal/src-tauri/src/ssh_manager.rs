@@ -156,6 +156,12 @@ impl SshManager {
                         let _ = app_clone
                             .emit("serial-data", (tab_id_str.clone(), data.clone(), ts, "RX"));
 
+                        let label = if tab_id_str == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id_str) };
+                        let data_to_broadcast = data.clone();
+                        tauri::async_runtime::block_on(async move {
+                            crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 0).await;
+                        });
+
                         crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
 
                         let mut rb_lock = rolling_buffer.lock().unwrap();
@@ -198,6 +204,12 @@ impl SshManager {
                                                          ),
                                                      );
 
+                                                     let label = if tab_id_str == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id_str) };
+                                                     let data_to_broadcast = final_data.clone();
+                                                     tauri::async_runtime::block_on(async move {
+                                                         crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 1).await;
+                                                     });
+
                                                      crate::log_utils::write_log_entry(
                                                          &log_file,
                                                          &log_format,
@@ -236,6 +248,12 @@ impl SshManager {
                                                                      "TX_AUTO",
                                                                  ),
                                                              );
+
+                                                             let label = if tab_id_str2 == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id_str2) };
+                                                             let data_to_broadcast = final_data.clone();
+                                                             tauri::async_runtime::block_on(async move {
+                                                                 crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 1).await;
+                                                             });
 
                                                              crate::log_utils::write_log_entry(
                                                                  &log_file2,
@@ -314,6 +332,13 @@ impl SshManager {
                     "TX".to_string(),
                 ),
             );
+            
+            let label = if tab_id == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id) };
+            let data_to_broadcast = data.clone();
+            tauri::async_runtime::block_on(async move {
+                crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 1).await;
+            });
+
             crate::log_utils::write_log_entry(&tab.log_file, &tab.log_format, &data, "TX");
             Ok(())
         } else {
@@ -363,6 +388,13 @@ impl SshManager {
                                 "serial-data",
                                 (tab_id_str.clone(), data.clone(), ts, "TX_PERIODIC"),
                             );
+                            
+                            let label = if tab_id_str == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id_str) };
+                            let data_to_broadcast = data.clone();
+                            tauri::async_runtime::block_on(async move {
+                                crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 1).await;
+                            });
+
                             crate::log_utils::write_log_entry(
                                 &log_file,
                                 &log_format,

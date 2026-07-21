@@ -65,4 +65,5 @@ export interface Project {
     tcp_config?: TcpConfig;
     ssh_config?: SshConfig;
     remote_config?: RemoteConfig;
+    chart_configs?: any[];
 }

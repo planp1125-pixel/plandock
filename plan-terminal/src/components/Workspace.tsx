@@ -118,7 +118,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
 
   // Refs for Chart to access latest state in listeners
-  const chartConfigsRef = useRef<ChartConfig[]>(project.chart_configs);
+  const chartConfigsRef = useRef<ChartConfig[]>(project.chart_configs || []);
   const chartDataQueue = useRef<ChartDataPoint[]>([]);
 
   const projectRef = useRef(project);
@@ -723,9 +723,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
       if (remoteChannel) {
         // Host sending raw data over remote channel
-        const payload = new Uint8Array(1 + bytes.length);
-        payload[0] = 0x01; // Data
-        payload.set(bytes, 1);
+        const payload = new Uint8Array(2 + bytes.length);
+        payload[0] = connectionType === 'SSH' ? 0x03 : 0x01; // Data Type
+        payload[1] = 0x01; // Direction: TX (1)
+        payload.set(bytes, 2);
         if (typeof remoteChannel.send === 'function') {
           remoteChannel.send(payload);
         } else {

@@ -364,7 +364,7 @@ impl SerialManager {
                             let label = if tab_id == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id) };
                             let data_to_broadcast = data.clone();
                             tauri::async_runtime::block_on(async move {
-                                crate::share_manager::broadcast_remote_data(label, data_to_broadcast).await;
+                                crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 0).await;
                             });
 
                             crate::log_utils::write_log_entry(&log_file, &log_format, &data, "RX");
@@ -413,6 +413,12 @@ impl SerialManager {
                                                                  "TX_AUTO",
                                                              ),
                                                          );
+                                                         
+                                                         let label = if tab_id == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id) };
+                                                         let data_to_broadcast = final_data.clone();
+                                                         tauri::async_runtime::block_on(async move {
+                                                             crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 1).await;
+                                                         });
 
                                                          crate::log_utils::write_log_entry(
                                                              &log_file,
@@ -457,6 +463,12 @@ impl SerialManager {
                                                                          "TX_AUTO",
                                                                      ),
                                                                  );
+                                                                 
+                                                                 let label = if tab_id_clone == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id_clone) };
+                                                                 let data_to_broadcast = final_data.clone();
+                                                                 tauri::async_runtime::block_on(async move {
+                                                                     crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 1).await;
+                                                                 });
 
                                                                  crate::log_utils::write_log_entry(
                                                                      &log_file_clone,
@@ -525,6 +537,14 @@ impl SerialManager {
                             direction.to_string(),
                         ),
                     );
+                    
+                    let dir_byte = if direction.starts_with("TX") { 1 } else { 0 };
+                    let label = if tab_id == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id) };
+                    let data_to_broadcast = data.clone();
+                    tauri::async_runtime::block_on(async move {
+                        crate::share_manager::broadcast_remote_data(label, data_to_broadcast, dir_byte).await;
+                    });
+                    
                     crate::log_utils::write_log_entry(
                         &tab.log_file,
                         &tab.log_format,
