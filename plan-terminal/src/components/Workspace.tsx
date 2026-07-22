@@ -136,11 +136,6 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   }, [chartConfigs]);
 
   const isIncomingSyncRef = useRef(false);
-  const tcpStateRef = useRef({ type: connectionType, mode: tcpMode, port: tcpPort });
-  
-  useEffect(() => {
-    tcpStateRef.current = { type: connectionType, mode: tcpMode, port: tcpPort };
-  }, [connectionType, tcpMode, tcpPort]);
 
   // Port selection state (lifted to header)
   const [ports, setPorts] = useState<PortInfo[]>([]);
@@ -414,6 +409,12 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [sshUsername, setSshUsername] = useState('pi');
   const [sshAuthMode, setSshAuthMode] = useState<'password' | 'private_key'>('password');
   const [sshAuthSecret, setSshAuthSecret] = useState('');
+
+  const tcpStateRef = useRef({ type: connectionType, mode: tcpMode, port: tcpPort });
+  
+  useEffect(() => {
+    tcpStateRef.current = { type: connectionType, mode: tcpMode, port: tcpPort };
+  }, [connectionType, tcpMode, tcpPort]);
 
   // Update connection fields when project loads (e.g. from .plant files)
   useEffect(() => {
