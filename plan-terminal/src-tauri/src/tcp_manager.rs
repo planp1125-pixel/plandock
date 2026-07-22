@@ -153,11 +153,9 @@ impl TcpManager {
                         
                         let _ = app_clone.emit("tcp-client-connected", tab_id_clone.clone());
                         
-                        // Break after accepting one connection (simulating an ESP device)
-                        // The user will need to click 'Listen' again if the client disconnects and they want to wait for another.
-                        // Or we could stay in the loop, wait for is_reading to become false, and then accept again.
-                        // Let's just break for simplicity and stability for now.
-                        break;
+                        // We do NOT break here anymore. 
+                        // The listener will immediately wait for another connection.
+                        // If a new client connects, it will overwrite tab.stream and take over the session!
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(100));

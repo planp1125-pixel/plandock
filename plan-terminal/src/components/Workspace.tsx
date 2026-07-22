@@ -136,6 +136,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   }, [chartConfigs]);
 
   const isIncomingSyncRef = useRef(false);
+  const tcpStateRef = useRef({ type: connectionType, mode: tcpMode, port: tcpPort });
+  
+  useEffect(() => {
+    tcpStateRef.current = { type: connectionType, mode: tcpMode, port: tcpPort };
+  }, [connectionType, tcpMode, tcpPort]);
 
   // Port selection state (lifted to header)
   const [ports, setPorts] = useState<PortInfo[]>([]);
@@ -516,12 +521,19 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
     const unlistenTcpDisconnect = safeListen<string>('tcp-disconnected', (event) => {
       if (event.payload !== tabId) return;
-      setConnected(false); onConnectionStatusChange(tabId, false, '');
-      alert("TCP Connection closed by remote host or error occurred.");
+      const st = tcpStateRef.current;
+      if (st.type === 'TCP' && st.mode === 'server') {
+        // Auto-resume listening UI state
+        onConnectionStatusChange(tabId, true, `Listening on ${st.port}`);
+      } else {
+        setConnected(false); onConnectionStatusChange(tabId, false, '');
+        alert("TCP Connection closed by remote host or error occurred.");
+      }
     });
 
     const unlistenTcpClientConnected = safeListen<string>('tcp-client-connected', (event) => {
       if (event.payload !== tabId) return;
+      setConnected(true);
       onConnectionStatusChange(tabId, true, "Client Connected");
     });
 
