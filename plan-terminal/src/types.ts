@@ -41,6 +41,7 @@ export interface Reaction {
 export interface TcpConfig {
     host: string;
     port: number;
+    mode?: 'client' | 'server';
 }
 
 export interface SshConfig {

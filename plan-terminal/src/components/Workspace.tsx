@@ -403,6 +403,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
   const [tcpHost, setTcpHost] = useState('192.168.1.100');
   const [tcpPort, setTcpPort] = useState(8080);
+  const [tcpMode, setTcpMode] = useState<'client' | 'server'>('client');
   const [sshHost, setSshHost] = useState('192.168.1.100');
   const [sshPort, setSshPort] = useState(22);
   const [sshUsername, setSshUsername] = useState('pi');
@@ -424,6 +425,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     if (project.tcp_config) {
       setTcpHost(project.tcp_config.host);
       setTcpPort(project.tcp_config.port);
+      if (project.tcp_config.mode) setTcpMode(project.tcp_config.mode);
     }
     if (project.ssh_config) {
       setSshHost(project.ssh_config.host);
@@ -518,6 +520,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       alert("TCP Connection closed by remote host or error occurred.");
     });
 
+    const unlistenTcpClientConnected = safeListen<string>('tcp-client-connected', (event) => {
+      if (event.payload !== tabId) return;
+      onConnectionStatusChange(tabId, true, "Client Connected");
+    });
+
     const unlistenSshDisconnect = safeListen<string>('ssh-disconnected', (event) => {
       if (event.payload !== tabId) return;
       setConnected(false); onConnectionStatusChange(tabId, false, '');
@@ -575,6 +582,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     return () => {
       unlistenData.then(f => f());
       unlistenTcpDisconnect.then(f => f());
+      unlistenTcpClientConnected.then(f => f());
       unlistenSshDisconnect.then(f => f());
       unlistenPlaybackStart.then(f => f());
       unlistenPlaybackEnded.then(f => f());
@@ -770,11 +778,19 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           stopBits
         });
       } else if (protocol === "TCP") {
-        await safeInvoke("connect_tcp", {
-          tabId,
-          host: tcpHost,
-          port: tcpPort
-        });
+        if (tcpMode === 'server') {
+          await safeInvoke("listen_tcp", {
+            tabId,
+            host: tcpHost || "0.0.0.0",
+            port: tcpPort
+          });
+        } else {
+          await safeInvoke("connect_tcp", {
+            tabId,
+            host: tcpHost,
+            port: tcpPort
+          });
+        }
       } else if (protocol === "SSH") {
         await safeInvoke("connect_ssh", {
           tabId,
@@ -790,7 +806,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       
       setActiveProtocol(protocol);
       setConnected(true);
-      onConnectionStatusChange(tabId, true, protocol === "Serial" ? selectedPort : protocol === "TCP" ? tcpHost : protocol === "SSH" ? sshHost : "Remote");
+      onConnectionStatusChange(tabId, true, protocol === "Serial" ? selectedPort : protocol === "TCP" ? (tcpMode === 'server' ? `Listening on ${tcpPort}` : tcpHost) : protocol === "SSH" ? sshHost : "Remote");
     } catch (e) {
       alert("Connection failed: " + e);
     } finally {
@@ -1153,6 +1169,20 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             </>
           ) : connectionType === 'TCP' ? (
             <>
+              <select
+                className="w-24 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500 cursor-pointer"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                value={tcpMode}
+                onChange={(e) => setTcpMode(e.target.value as 'client' | 'server')}
+                disabled={connected}
+              >
+                <option value="client">Client</option>
+                <option value="server">Server</option>
+              </select>
               <input
                 type="text"
                 className="w-32 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500"
@@ -1328,7 +1358,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                   onClick={handleConnect}
                   disabled={isConnecting || (connectionType === 'Serial' && !selectedPort)}
                 >
-                  {isConnecting ? 'Connecting...' : 'Connect'}
+                  {isConnecting ? (connectionType === 'TCP' && tcpMode === 'server' ? 'Listening...' : 'Connecting...') : (connectionType === 'TCP' && tcpMode === 'server' ? 'Listen' : 'Connect')}
                 </button>
               ) : (
                 <button
@@ -1380,7 +1410,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 ...project,
                 connection_type: connectionType,
                 serial_config: { port_name: selectedPort, baud_rate: baudRate, data_bits: dataBits, flow_control: flowControl, parity: parity, stop_bits: stopBits },
-                tcp_config: { host: tcpHost, port: tcpPort },
+                tcp_config: { host: tcpHost, port: tcpPort, mode: tcpMode },
                 ssh_config: { host: sshHost, port: sshPort, username: sshUsername },
               }}
               onUpdate={(updatedProject: Project) => {
@@ -1486,24 +1516,28 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               isActive={isActive}
               autoScroll={autoScroll}
               setAutoScroll={setAutoScroll}
-              onSendCommand={connectionType === 'SSH' ? async (cmd: string) => {
+              onSendCommand={async (cmd: string) => {
                 try {
-                  const bytes = Array.from(new TextEncoder().encode(cmd));
-                  await safeInvoke("send_ssh_data", { tabId, data: bytes });
+                  if (connectionType === 'SSH') {
+                    const bytes = Array.from(new TextEncoder().encode(cmd));
+                    await safeInvoke("send_ssh_data", { tabId, data: bytes });
+                  } else if (connectionType === 'Remote' && remoteChannel) {
+                    const bytes = new TextEncoder().encode(cmd + '\r\n');
+                    const packet = new Uint8Array([0x01, ...bytes]); // 0x01 = Terminal Data
+                    remoteChannel.send(packet);
+                    addLog(`Sent remote command: ${cmd.trim()}`);
+                  } else if (connectionType === 'TCP') {
+                    const bytes = Array.from(new TextEncoder().encode(cmd + '\r\n'));
+                    await safeInvoke("send_tcp_data", { tabId, data: bytes });
+                  } else if (connectionType === 'Serial') {
+                    const bytes = Array.from(new TextEncoder().encode(cmd + '\r\n'));
+                    await safeInvoke("send_serial_data", { tabId, data: bytes });
+                  }
                 } catch (e) {
-                  console.error("Failed to send SSH command:", e);
+                  console.error(`Failed to send ${connectionType} command:`, e);
+                  addLog(`Error sending command: ${e}`);
                 }
-              } : (connectionType === 'Remote' && remoteChannel) ? async (cmd: string) => {
-                try {
-                  const bytes = new TextEncoder().encode(cmd + '\r\n');
-                  const packet = new Uint8Array([0x01, ...bytes]); // 0x01 = Terminal Data
-                  remoteChannel.send(packet);
-                  addLog(`Sent remote command: ${cmd.trim()}`);
-                } catch (e) {
-                  console.error("Failed to send remote data:", e);
-                  addLog(`Error sending remote command: ${e}`);
-                }
-              } : undefined}
+              }}
             />
           </div>
         </div>

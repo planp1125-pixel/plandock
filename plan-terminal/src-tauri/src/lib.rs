@@ -275,6 +275,21 @@ async fn connect_tcp(
 }
 
 #[tauri::command]
+async fn listen_tcp(
+    tcp_manager: State<'_, Arc<TcpManager>>,
+    app: AppHandle,
+    tab_id: String,
+    host: String,
+    port: u16,
+) -> Result<(), String> {
+    let host = host.clone();
+    let manager = tcp_manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        manager.listen(app, &tab_id, &host, port)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn disconnect_tcp(tcp_manager: State<'_, Arc<TcpManager>>, tab_id: String) {
     tcp_manager.disconnect(&tab_id);
 }
@@ -556,6 +571,7 @@ pub fn run() {
             write_file_direct,
             append_to_file,
             connect_tcp,
+            listen_tcp,
             disconnect_tcp,
             send_tcp_data,
             is_tcp_connected,

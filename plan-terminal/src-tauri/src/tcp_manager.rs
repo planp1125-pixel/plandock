@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter};
 pub struct TabState {
     pub stream: Arc<Mutex<Option<Arc<TcpStream>>>>,
     pub is_reading: Arc<Mutex<bool>>,
+    pub is_listening: Arc<Mutex<bool>>,
     pub log_file: Arc<Mutex<Option<BufWriter<File>>>>,
     pub reactions: Arc<Mutex<Vec<ActiveReaction>>>,
     pub log_format: Arc<Mutex<crate::log_utils::LogFormat>>,
@@ -23,6 +24,7 @@ impl TabState {
         Self {
             stream: Arc::new(Mutex::new(None)),
             is_reading: Arc::new(Mutex::new(false)),
+            is_listening: Arc::new(Mutex::new(false)),
             log_file: Arc::new(Mutex::new(None)),
             reactions: Arc::new(Mutex::new(Vec::new())),
             log_format: Arc::new(Mutex::new(crate::log_utils::LogFormat::Jsonl)),
@@ -32,6 +34,7 @@ impl TabState {
     }
 }
 
+#[derive(Clone)]
 pub struct TcpManager {
     tabs: Arc<Mutex<HashMap<String, Arc<TabState>>>>,
 }
@@ -95,6 +98,84 @@ impl TcpManager {
         Ok(())
     }
 
+    pub fn listen(
+        &self,
+        app: AppHandle,
+        tab_id: &str,
+        host: &str,
+        port: u16,
+    ) -> Result<(), String> {
+        self.disconnect(tab_id);
+        std::thread::sleep(Duration::from_millis(100));
+
+        let addr = format!("{}:{}", host, port);
+        eprintln!("[TCP] [{}] Listening on {}", tab_id, addr);
+
+        let listener = std::net::TcpListener::bind(&addr).map_err(|e| format!("Bind failed: {}", e))?;
+        listener.set_nonblocking(true).map_err(|e| e.to_string())?;
+
+        let tab = self.get_or_create_tab(tab_id);
+        
+        {
+            let mut l = tab.is_listening.lock().unwrap();
+            *l = true;
+        }
+
+        let is_listening = tab.is_listening.clone();
+        let stream_arc = tab.stream.clone();
+        let app_clone = app.clone();
+        let tab_id_clone = tab_id.to_string();
+        let manager_clone = self.clone();
+
+        std::thread::spawn(move || {
+            loop {
+                if !*is_listening.lock().unwrap() {
+                    break;
+                }
+
+                match listener.accept() {
+                    Ok((stream, client_addr)) => {
+                        eprintln!("[TCP] [{}] Accepted connection from {}", tab_id_clone, client_addr);
+                        
+                        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_nodelay(true);
+                        
+                        let shared_stream = Arc::new(stream);
+                        {
+                            let mut s = stream_arc.lock().unwrap();
+                            *s = Some(shared_stream.clone());
+                        }
+                        
+                        tab.rolling_buffer.lock().unwrap().clear();
+
+                        manager_clone.start_reader(app_clone.clone(), tab_id_clone.clone(), tab.clone(), shared_stream);
+                        
+                        let _ = app_clone.emit("tcp-client-connected", tab_id_clone.clone());
+                        
+                        // Break after accepting one connection (simulating an ESP device)
+                        // The user will need to click 'Listen' again if the client disconnects and they want to wait for another.
+                        // Or we could stay in the loop, wait for is_reading to become false, and then accept again.
+                        // Let's just break for simplicity and stability for now.
+                        break;
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    Err(e) => {
+                        eprintln!("[TCP] [{}] Listener error: {}", tab_id_clone, e);
+                        break;
+                    }
+                }
+            }
+            
+            let mut l = is_listening.lock().unwrap();
+            *l = false;
+        });
+
+        Ok(())
+    }
+
     pub fn set_reactions(&self, tab_id: &str, new_reactions: Vec<ActiveReaction>) {
         let tab = self.get_or_create_tab(tab_id);
         let mut r_lock = tab.reactions.lock().unwrap();
@@ -110,6 +191,10 @@ impl TcpManager {
             {
                 let mut r = tab.is_reading.lock().unwrap();
                 *r = false;
+            }
+            {
+                let mut l = tab.is_listening.lock().unwrap();
+                *l = false;
             }
             thread::sleep(Duration::from_millis(50));
             {
