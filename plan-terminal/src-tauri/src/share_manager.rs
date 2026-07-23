@@ -648,7 +648,7 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
     d.on_message(Box::new(move |msg: DataChannelMessage| {
         let d_inner = Arc::clone(&d_c);
         let pid = peer_id_c.clone();
-        let app_val = app_handle_c.clone();
+        let _app_val = app_handle_c.clone();
         Box::pin(async move {
             if msg.data.is_empty() { return; }
             let msg_type = msg.data[0];
@@ -685,6 +685,19 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                         let tab_id_str: &String = tab_id.value();
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
                             let _ = ctx.ssh.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
+                        }
+                    }
+                }
+                0x04 => { // TCP Data from remote
+                    // The payload format is [0x04, direction_byte, ...data]
+                    if msg.data.len() < 2 { return; }
+                    let actual_payload = &msg.data[2..];
+                    
+                    let label = d_inner.label();
+                    if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
+                        let tab_id_str: &String = tab_id.value();
+                        if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                            let _ = ctx._tcp.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
                         }
                     }
                 }
@@ -815,8 +828,114 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                 let _ = ctx.app.emit("remote-sequence-trigger", (peer_id, d.label().to_owned(), payload_vec));
             }
         }
+        0x0B => { // Request Connect (Viewer -> Host)
+            if let Ok(config_str) = String::from_utf8(payload.to_vec()) {
+                if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_str) {
+                    if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                        let protocol = config["protocol"].as_str().unwrap_or("Serial");
+                        let tab_id = "main".to_string(); // Host always uses 'main'
+                        
+                        if protocol == "Serial" {
+                            let serial_config = crate::serial_manager::SerialConfig {
+                                port_name: config["portName"].as_str().unwrap_or("").to_string(),
+                                baud_rate: config["baudRate"].as_u64().unwrap_or(115200) as u32,
+                                data_bits: config["dataBits"].as_u64().unwrap_or(8) as u8,
+                                flow_control: config["flowControl"].as_str().unwrap_or("None").to_string(),
+                                parity: config["parity"].as_str().unwrap_or("None").to_string(),
+                                stop_bits: config["stopBits"].as_u64().unwrap_or(1) as u8,
+                            };
+                            let _ = ctx.serial.open_port(ctx.app.clone(), &tab_id, serial_config);
+                        } else if protocol == "TCP" {
+                            let host = config["tcpHost"].as_str().unwrap_or("127.0.0.1").to_string();
+                            let port = config["tcpPort"].as_u64().unwrap_or(8080) as u16;
+                            let tcp_mode = config["tcpMode"].as_str().unwrap_or("client");
+                            if tcp_mode == "server" {
+                                let _ = ctx._tcp.listen(ctx.app.clone(), &tab_id, &host, port);
+                            } else {
+                                let _ = ctx._tcp.connect(ctx.app.clone(), &tab_id, &host, port);
+                            }
+                        } else if protocol == "SSH" {
+                            let host = config["sshHost"].as_str().unwrap_or("").to_string();
+                            let port = config["sshPort"].as_u64().unwrap_or(22) as u16;
+                            let username = config["sshUsername"].as_str().unwrap_or("").to_string();
+                            let auth_mode = config["sshAuthMode"].as_str().unwrap_or("password").to_string();
+                            let auth_secret = config["sshAuthSecret"].as_str().unwrap_or("").to_string();
+                            
+                            let _ = ctx.ssh.connect(ctx.app.clone(), &tab_id, &host, port, &username, &auth_mode, &auth_secret);
+                        }
+
+                        use tauri::Emitter;
+                        let _ = ctx.app.emit("remote-connect-applied", config);
+                    }
+                }
+            }
+        }
+        0x0C => { // Request Disconnect (Viewer -> Host)
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                let tab_id = "main".to_string();
+                let _ = ctx.serial.close_port(&tab_id);
+                let _ = ctx._tcp.disconnect(&tab_id);
+                let _ = ctx.ssh.disconnect(&tab_id);
+
+                use tauri::Emitter;
+                let _ = ctx.app.emit("remote-disconnect-applied", ());
+            }
+        }
+        0x0E => { // Request Port List (Viewer -> Host)
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let _ = ctx.app.emit("remote-request-ports", (peer_id, d.label().to_owned()));
+            }
+        }
+        0x0F => { // Parse Project Request (Viewer -> Host)
+            if let Ok(json_str) = String::from_utf8(payload.to_vec()) {
+                if let Ok(req) = serde_json::from_str::<serde_json::Value>(&json_str) {
+                    let ext = req["ext"].as_str().unwrap_or("");
+                    let content = req["content"].as_str().unwrap_or("");
+                    
+                    if ext == "ptp" {
+                        if let Ok(parsed_project) = crate::project_manager::parse_ptp_content(content, "Imported Project") {
+                            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                                use tauri::Emitter;
+                                let _ = ctx.app.emit("remote-parsed-project", (peer_id, parsed_project));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        0x10 => { // State Sync (Viewer <-> Host)
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let payload_vec = payload.to_vec();
+                let _ = ctx.app.emit("remote-state-sync", (peer_id, d.label().to_owned(), payload_vec));
+            }
+        }
+        0x12 => { // Recording State Sync (Viewer <-> Host)
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let payload_vec = payload.to_vec();
+                let _ = ctx.app.emit("remote-recording-sync", (peer_id, d.label().to_owned(), payload_vec));
+            }
+        }
         _ => {}
     }
+}
+
+#[tauri::command]
+pub async fn broadcast_state_sync(state_json: String) -> Result<(), String> {
+    let mut payload = vec![0x02, 0x10]; // Control -> State Sync
+    payload.extend_from_slice(state_json.as_bytes());
+
+    for kv in SHARE_MANAGER.peers.iter() {
+        let peer = kv.value();
+        for ch in &peer.channels {
+            if ch.ready_state() == RTCDataChannelState::Open {
+                let _ = ch.send(&payload.clone().into()).await;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn connect_remote(app: AppHandle, _tab_id: String, device_id: String) -> Result<(), String> {

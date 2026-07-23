@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, memo } from "react";
-import { safeInvoke, safeListen, safeOpen, safeSave, isTauri } from "../utils/tauri";
+import { useState, useEffect, useRef, useCallback, memo } from "react";
+import { safeInvoke, safeListen, safeOpen, safeSave, isTauri, safeWriteTextFile } from "../utils/tauri";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { Terminal, LogEntry } from "./Terminal";
 import { SequenceEditor } from "./SequenceEditor";
@@ -89,6 +89,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const incomingQueue = useRef<{ bytes: number[], ts: number, dir: string }[]>([]);
+  const recordingBufferRef = useRef<string[]>([]);
+  const liveLogBufferRef = useRef<string[]>([]);
   const lastRef = useRef<{ id: string, timestamp: number, direction: string } | null>(null);
   const [connected, setConnected] = useState(false);
   const [activeProtocol, setActiveProtocol] = useState<string | null>(null);
@@ -170,6 +172,30 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   };
 
   const handleToggleRecord = async () => {
+    if (!isTauri()) {
+      if (isRecording) {
+        setIsRecording(false);
+        const selectedPath = await safeSave({
+          filters: [{ name: 'Plan Terminal Session', extensions: ['plog'] }],
+          title: 'Save Session Recording (.plog)',
+          defaultPath: `session_${Date.now()}.plog`
+        });
+        if (selectedPath) {
+          try {
+             await safeWriteTextFile(selectedPath as string, recordingBufferRef.current.join("\n") + "\n");
+             alert("Session recording saved successfully.");
+          } catch (e) {
+             alert("Failed to save recording: " + String(e));
+          }
+        }
+        recordingBufferRef.current = [];
+      } else {
+        recordingBufferRef.current = [];
+        setIsRecording(true);
+      }
+      return;
+    }
+
     if (isRecording) {
       await safeInvoke("stop_logging", { tabId, connType: connectionType });
       setIsRecording(false);
@@ -221,6 +247,30 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   };
 
   const handleStartLiveLogging = async () => {
+    if (!isTauri()) {
+      if (isLiveLogging) {
+        setIsLiveLogging(false);
+        const path = await safeSave({
+          filters: [{ name: 'Log File', extensions: ['txt', 'log', 'csv'] }],
+          title: 'Select Log File Location',
+          defaultPath: `log_${tabId}_${Date.now()}.txt`
+        });
+        if (path) {
+          try {
+             await safeWriteTextFile(path as string, liveLogBufferRef.current.join("\n") + "\n");
+             alert("Log file saved successfully.");
+          } catch (e) {
+             alert("Failed to save log: " + String(e));
+          }
+        }
+        liveLogBufferRef.current = [];
+      } else {
+        liveLogBufferRef.current = [];
+        setIsLiveLogging(true);
+      }
+      return;
+    }
+
     if (!isLiveLogging) {
       try {
         const path = await safeSave({
@@ -261,6 +311,40 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       if (incomingQueue.current.length > 0) {
         const batch = [...incomingQueue.current];
         incomingQueue.current = [];
+
+        if (!isTauri() && (isRecording || isLiveLogging)) {
+          for (const item of batch) {
+            if (isRecording) {
+              if (recordingBufferRef.current.length >= 100000) {
+                setIsRecording(false);
+                alert("Recording buffer limit reached (100,000 logs). Recording auto-stopped. Please click the Record button again to save the file.");
+              } else {
+                const date = new Date(item.ts);
+                const timeStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}000`;
+                const asciiStr = String.fromCharCode(...item.bytes.map(b => (b >= 32 && b < 127) ? b : 46)).replace(/"/g, '\\"').replace(/\\/g, '\\\\');
+                recordingBufferRef.current.push(`{"ts":${item.ts},"time":"${timeStr}","dir":"${item.dir}","data":[${item.bytes.join(',')}],"ascii":"${asciiStr}"}`);
+              }
+            }
+
+            if (isLiveLogging) {
+              if (liveLogBufferRef.current.length >= 100000) {
+                setIsLiveLogging(false);
+                alert("Live Log buffer limit reached (100,000 logs). Logging auto-stopped.");
+              } else {
+                const date = new Date(item.ts);
+                const timeStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}000`;
+                
+                let formattedData = "";
+                if (exportAscii) {
+                  formattedData = String.fromCharCode(...item.bytes.map(b => (b >= 32 && b < 127) ? b : 46));
+                } else {
+                  formattedData = item.bytes.map(b => b.toString(16).padStart(2, '0').toUpperCase()).join(' ');
+                }
+                liveLogBufferRef.current.push(`[${timeStr}] ${item.dir} ${formattedData}`);
+              }
+            }
+          }
+        }
 
         const gap = Number(localStorage.getItem('terminal-ts-gap') || '100');
         const aggregatedBatch: { bytes: number[], ts: number, dir: string }[] = [];
@@ -323,14 +407,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     return () => clearInterval(interval);
   }, []);
 
-  const [connectionType, setConnectionType] = useState<'Serial' | 'TCP' | 'SSH' | 'Remote'>(
-    !isTauri() || remoteChannel ? 'Remote' : 'Serial'
-  );
+  const [connectionType, setConnectionType] = useState<'Serial' | 'TCP' | 'SSH' | 'Remote'>('Serial');
 
   useEffect(() => {
-    if (!isTauri() || remoteChannel) {
-      setConnectionType('Remote');
-    }
+    // Removed forced 'Remote' connection type
   }, [remoteChannel]);
   const [remoteDeviceId, setRemoteDeviceId] = useState('');
 
@@ -339,14 +419,18 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     if (!remoteChannel) return;
 
     if (remoteChannel.readyState === 'open') {
-      setConnected(true);
-      setConnectionType('Remote');
-      onConnectionStatusChange(tabId, true, 'P2P Remote');
+      // Just visually indicate WebRTC is ready, but wait for Host sync to set `connected`
+      // We can request port list here
+      const reqPorts = new Uint8Array([0x02, 0x0E]); // Request Port List
+      if (typeof remoteChannel.send === 'function') {
+        remoteChannel.send(reqPorts);
+      }
     } else {
-      setConnectionType('Remote');
       remoteChannel.onopen = () => {
-        setConnected(true);
-        onConnectionStatusChange(tabId, true, 'P2P Remote');
+        const reqPorts = new Uint8Array([0x02, 0x0E]); // Request Port List
+        if (typeof remoteChannel.send === 'function') {
+          remoteChannel.send(reqPorts);
+        }
       };
     }
 
@@ -377,15 +461,74 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             const payload = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
             const syncData = JSON.parse(payload);
             if (syncData.type === "PROJECT_SYNC") {
+              isIncomingSyncRef.current = true; // prevent reflection loop
               setProject(syncData.project);
               if (syncData.connectionType) {
                 setConnectionType(syncData.connectionType);
                 setRemoteDeviceId(syncData.deviceName || 'Remote Host');
               }
-              addLog("Project state mirrored from Host.");
+              if (typeof syncData.connected === 'boolean') {
+                setConnected(syncData.connected);
+                if (syncData.connected) {
+                    onConnectionStatusChange(tabId, true, syncData.connectionType === "Serial" ? syncData.project.serial_config?.port_name : "Connected");
+                } else {
+                    onConnectionStatusChange(tabId, false, "Disconnected");
+                }
+              }
+              if (syncData.ports) {
+                setPorts(syncData.ports);
+              }
+              addLog("Host state mirrored.");
             }
           } catch (e) {
             console.error("Failed to parse project sync:", e);
+          }
+        } else if (bytes[1] === 0x10) {
+          // State Sync (Host -> Viewer)
+          try {
+            const payloadStr = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
+            const state = JSON.parse(payloadStr);
+            isIncomingSyncRef.current = true;
+            if (state.protocol) setConnectionType(state.protocol);
+            if (state.activeProtocol) setActiveProtocol(state.activeProtocol);
+            if (state.portName) setSelectedPort(state.portName);
+            if (state.baudRate) setBaudRate(state.baudRate);
+            if (state.dataBits) setDataBits(state.dataBits);
+            if (state.stopBits) setStopBits(state.stopBits);
+            if (state.parity) setParity(state.parity);
+            if (state.flowControl) setFlowControl(state.flowControl);
+            if (state.tcpHost) setTcpHost(state.tcpHost);
+            if (state.tcpPort) setTcpPort(state.tcpPort);
+            if (state.tcpMode) setTcpMode(state.tcpMode);
+            if (state.sshHost) setSshHost(state.sshHost);
+            if (state.sshPort) setSshPort(state.sshPort);
+            if (state.sshUsername) setSshUsername(state.sshUsername);
+            if (state.sshAuthMode) setSshAuthMode(state.sshAuthMode);
+            if (state.sshAuthSecret !== undefined) setSshAuthSecret(state.sshAuthSecret);
+            if (typeof state.isRecording === 'boolean') setIsRecording(state.isRecording);
+            if (typeof state.connected === 'boolean') {
+              setConnected(state.connected);
+              onConnectionStatusChange(
+                tabId,
+                state.connected,
+                state.protocol === "Serial" ? (state.portName || "Serial") :
+                state.protocol === "TCP" ? (state.tcpMode === 'server' ? `Listening on ${state.tcpPort}` : state.tcpHost) :
+                state.protocol === "SSH" ? state.sshHost : "Remote"
+              );
+            }
+          } catch (err) {
+            console.error("Failed to parse state sync:", err);
+          }
+        } else if (bytes[1] === 0x12) {
+          // Recording Sync
+          try {
+            const payloadStr = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
+            const recState = JSON.parse(payloadStr);
+            if (typeof recState.isRecording === 'boolean') {
+              setIsRecording(recState.isRecording);
+            }
+          } catch (err) {
+            console.error("Failed to parse recording sync:", err);
           }
         }
       }
@@ -412,6 +555,43 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
   const tcpStateRef = useRef({ type: connectionType, mode: tcpMode, port: tcpPort });
   
+  const broadcastHostStateRef = useRef<() => void>(() => {});
+
+  const broadcastHostState = useCallback(() => {
+    if (!isTauri()) return;
+    const stateObj = {
+      connected,
+      protocol: connectionType,
+      activeProtocol,
+      portName: selectedPort,
+      baudRate,
+      dataBits,
+      stopBits,
+      parity,
+      flowControl,
+      tcpHost,
+      tcpPort,
+      tcpMode,
+      sshHost,
+      sshPort,
+      sshUsername,
+      sshAuthMode,
+      sshAuthSecret,
+      isRecording
+    };
+    safeInvoke("broadcast_state_sync", { stateJson: JSON.stringify(stateObj) }).catch(() => {});
+  }, [connected, connectionType, activeProtocol, selectedPort, baudRate, dataBits, stopBits, parity, flowControl, tcpHost, tcpPort, tcpMode, sshHost, sshPort, sshUsername, sshAuthMode, sshAuthSecret, isRecording]);
+
+  useEffect(() => {
+    broadcastHostStateRef.current = broadcastHostState;
+  }, [broadcastHostState]);
+
+  useEffect(() => {
+    if (isTauri()) {
+      broadcastHostState();
+    }
+  }, [connected, activeProtocol, connectionType, selectedPort, baudRate, dataBits, stopBits, parity, flowControl, tcpHost, tcpPort, tcpMode, sshHost, sshPort, sshUsername, sshAuthMode, sshAuthSecret, isRecording, broadcastHostState]);
+
   useEffect(() => {
     tcpStateRef.current = { type: connectionType, mode: tcpMode, port: tcpPort };
   }, [connectionType, tcpMode, tcpPort]);
@@ -592,6 +772,83 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       setIsPlaybackPaused(false);
     });
 
+    const unlistenStateSync = safeListen<[string, string, number[]]>('remote-state-sync', (event) => {
+      const [, , bytes] = event.payload;
+      try {
+        const payloadStr = new TextDecoder().decode(new Uint8Array(bytes.slice(1)));
+        const state = JSON.parse(payloadStr);
+        isIncomingSyncRef.current = true;
+        if (state.protocol) setConnectionType(state.protocol);
+        if (state.activeProtocol) setActiveProtocol(state.activeProtocol);
+        if (state.portName) setSelectedPort(state.portName);
+        if (state.baudRate) setBaudRate(state.baudRate);
+        if (state.dataBits) setDataBits(state.dataBits);
+        if (state.stopBits) setStopBits(state.stopBits);
+        if (state.parity) setParity(state.parity);
+        if (state.flowControl) setFlowControl(state.flowControl);
+        if (state.tcpHost) setTcpHost(state.tcpHost);
+        if (state.tcpPort) setTcpPort(state.tcpPort);
+        if (state.tcpMode) setTcpMode(state.tcpMode);
+        if (state.sshHost) setSshHost(state.sshHost);
+        if (state.sshPort) setSshPort(state.sshPort);
+        if (state.sshUsername) setSshUsername(state.sshUsername);
+        if (typeof state.isRecording === 'boolean') setIsRecording(state.isRecording);
+        if (typeof state.connected === 'boolean') {
+          setConnected(state.connected);
+          onConnectionStatusChange(
+            tabId,
+            state.connected,
+            state.protocol === "Serial" ? (state.portName || "Serial") :
+            state.protocol === "TCP" ? (state.tcpMode === 'server' ? `Listening on ${state.tcpPort}` : state.tcpHost) :
+            state.protocol === "SSH" ? state.sshHost : "Remote"
+          );
+        }
+      } catch (e) {
+        console.error("Failed to parse remote-state-sync:", e);
+      }
+    });
+
+    const unlistenConnectApplied = safeListen<any>('remote-connect-applied', (event) => {
+      const config = event.payload;
+      if (config) {
+        if (config.protocol) setConnectionType(config.protocol);
+        if (config.portName) setSelectedPort(config.portName);
+        if (config.baudRate) setBaudRate(config.baudRate);
+        if (config.tcpHost) setTcpHost(config.tcpHost);
+        if (config.tcpPort) setTcpPort(config.tcpPort);
+        if (config.tcpMode) setTcpMode(config.tcpMode);
+        if (config.sshHost) setSshHost(config.sshHost);
+        if (config.sshPort) setSshPort(config.sshPort);
+        if (config.sshUsername) setSshUsername(config.sshUsername);
+        setConnected(true);
+        setActiveProtocol(config.protocol || "Serial");
+        onConnectionStatusChange(tabId, true, config.protocol === "Serial" ? config.portName : config.protocol === "TCP" ? (config.tcpMode === 'server' ? `Listening on ${config.tcpPort}` : config.tcpHost) : config.sshHost);
+      }
+    });
+
+    const unlistenDisconnectApplied = safeListen<void>('remote-disconnect-applied', () => {
+      setConnected(false);
+      setActiveProtocol(null);
+      onConnectionStatusChange(tabId, false, "Disconnected");
+    });
+
+    const unlistenChannelOpen = safeListen<any>('remote-channel-open', () => {
+      if (isTauri()) {
+        setTimeout(() => {
+          broadcastHostStateRef.current();
+        }, 200);
+      }
+    });
+
+    const unlistenParsedProject = safeListen<[string, Project]>('remote-parsed-project', (event) => {
+      const [, parsedProject] = event.payload;
+      // Auto-fix legacy default names
+      if (parsedProject.name === "Untitled Project" || parsedProject.name === "New Project") {
+          parsedProject.name = "Plan Terminal";
+      }
+      setProject(parsedProject);
+    });
+
     return () => {
       unlistenData.then(f => f());
       unlistenTcpDisconnect.then(f => f());
@@ -601,6 +858,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       unlistenPlaybackEnded.then(f => f());
       unlistenTrigger.then(f => f());
       unlistenSync.then(f => f());
+      unlistenStateSync.then(f => f());
+      unlistenConnectApplied.then(f => f());
+      unlistenDisconnectApplied.then(f => f());
+      unlistenChannelOpen.then(f => f());
+      unlistenParsedProject.then(f => f());
     };
   }, []);
 
@@ -651,7 +913,16 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       }
     };
     window.addEventListener('trigger-tab-share', handleTrigger);
-    return () => window.removeEventListener('trigger-tab-share', handleTrigger);
+    
+    // Listen for remote port requests
+    const unlistenPortsReq = safeListen("remote-request-ports", () => {
+      refreshPorts();
+    });
+
+    return () => {
+      window.removeEventListener('trigger-tab-share', handleTrigger);
+      unlistenPortsReq.then(f => f());
+    };
   }, [isActive, tabId, project, connectionType]);
 
   // Project Sync Broadcaster
@@ -665,6 +936,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       type: "PROJECT_SYNC",
       project: project,
       connectionType: connectionType,
+      connected: connected,
+      ports: ports,
       deviceName: localStorage.getItem('remote-device-name') || 'Remote Host'
     };
     const payloadBytes = new TextEncoder().encode(JSON.stringify(syncData));
@@ -685,7 +958,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           .catch(e => console.error("Sync failed:", e));
       });
     }
-  }, [project, connectionType]);
+  }, [project, connectionType, connected, ports]);
 
   const [activePeriodicIds, setActivePeriodicIds] = useState<Set<string>>(new Set());
 
@@ -780,41 +1053,71 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       setRxPackets(0);
       setTxPackets(0);
       const protocol = connectionType || "Serial";
-      if (protocol === "Serial") {
-        await safeInvoke("open_serial_port", {
-          tabId,
+      
+      if (!isTauri() && remoteChannel) {
+        // Send Connect request over WebRTC
+        const config = {
+          protocol,
           portName: selectedPort,
           baudRate,
           dataBits,
           flowControl,
           parity,
-          stopBits
-        });
-      } else if (protocol === "TCP") {
-        if (tcpMode === 'server') {
-          await safeInvoke("listen_tcp", {
-            tabId,
-            host: tcpHost || "0.0.0.0",
-            port: tcpPort
-          });
-        } else {
-          await safeInvoke("connect_tcp", {
-            tabId,
-            host: tcpHost,
-            port: tcpPort
-          });
+          stopBits,
+          tcpHost,
+          tcpPort,
+          sshHost,
+          sshPort,
+          sshUsername,
+          sshAuthMode,
+          sshAuthSecret
+        };
+        const configBytes = new TextEncoder().encode(JSON.stringify(config));
+        const payload = new Uint8Array(2 + configBytes.length);
+        payload[0] = 0x02; // Control
+        payload[1] = 0x0B; // Request Connect
+        payload.set(configBytes, 2);
+        
+        if (typeof remoteChannel.send === 'function') {
+          remoteChannel.send(payload);
         }
-      } else if (protocol === "SSH") {
-        await safeInvoke("connect_ssh", {
-          tabId,
-          host: sshHost,
-          port: sshPort,
-          user: sshUsername,
-          authMode: sshAuthMode,
-          authSecret: sshAuthSecret
-        });
-      } else if (protocol === "Remote") {
-        await safeInvoke("connect_remote", { tabId, deviceId: remoteDeviceId });
+      } else {
+        if (protocol === "Serial") {
+          await safeInvoke("open_serial_port", {
+            tabId,
+            portName: selectedPort,
+            baudRate,
+            dataBits,
+            flowControl,
+            parity,
+            stopBits
+          });
+        } else if (protocol === "TCP") {
+          if (tcpMode === 'server') {
+            await safeInvoke("listen_tcp", {
+              tabId,
+              host: tcpHost || "0.0.0.0",
+              port: tcpPort
+            });
+          } else {
+            await safeInvoke("connect_tcp", {
+              tabId,
+              host: tcpHost,
+              port: tcpPort
+            });
+          }
+        } else if (protocol === "SSH") {
+          await safeInvoke("connect_ssh", {
+            tabId,
+            host: sshHost,
+            port: sshPort,
+            user: sshUsername,
+            authMode: sshAuthMode,
+            authSecret: sshAuthSecret
+          });
+        } else if (protocol === "Remote") {
+          await safeInvoke("connect_remote", { tabId, deviceId: remoteDeviceId });
+        }
       }
       
       setActiveProtocol(protocol);
@@ -830,17 +1133,26 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const handleDisconnect = async () => {
     try {
       const protocolToDisconnect = activeProtocol || connectionType || "Serial";
-      await safeInvoke("stop_all_periodic_sequences", { tabId, connType: protocolToDisconnect });
       
-      if (protocolToDisconnect === "Serial") {
-        await safeInvoke("close_serial_port", { tabId });
-      } else if (protocolToDisconnect === "TCP") {
-        await safeInvoke("disconnect_tcp", { tabId });
-      } else if (protocolToDisconnect === "SSH") {
-        await safeInvoke("disconnect_ssh", { tabId });
-      } else if (protocolToDisconnect === "Remote") {
-        if (remoteChannel && remoteChannel.close) {
-          remoteChannel.close();
+      if (!isTauri() && remoteChannel) {
+        // Send Disconnect request over WebRTC
+        const payload = new Uint8Array([0x02, 0x0C]); // Control -> Request Disconnect
+        if (typeof remoteChannel.send === 'function') {
+          remoteChannel.send(payload);
+        }
+      } else {
+        await safeInvoke("stop_all_periodic_sequences", { tabId, connType: protocolToDisconnect });
+        
+        if (protocolToDisconnect === "Serial") {
+          await safeInvoke("close_serial_port", { tabId });
+        } else if (protocolToDisconnect === "TCP") {
+          await safeInvoke("disconnect_tcp", { tabId });
+        } else if (protocolToDisconnect === "SSH") {
+          await safeInvoke("disconnect_ssh", { tabId });
+        } else if (protocolToDisconnect === "Remote") {
+          if (remoteChannel && remoteChannel.close) {
+            remoteChannel.close();
+          }
         }
       }
       setConnected(false);
@@ -978,39 +1290,31 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         <div className="flex items-center flex-wrap gap-2 justify-end">
           {/* Connection Type */}
           <div className="flex items-center gap-2 relative">
-            {connectionType === 'Remote' ? (
-              <div className="flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded shadow-sm">
+            {(!isTauri() || remoteChannel) && (
+              <div className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded shadow-sm mr-1">
                 <Globe className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
-                <span className="text-xs font-bold text-blue-500 uppercase tracking-wider">Remote Monitor</span>
-                <div className="w-[1px] h-3 bg-blue-500/20 mx-1" />
-                <span className="text-[10px] font-mono text-zinc-400 truncate max-w-[120px]">
-                  {peerId || remoteDeviceId || 'P2P Session'}
-                </span>
-                {!connected && (
-                  <span className="text-[9px] font-bold text-amber-500 uppercase animate-pulse ml-2">Awaiting Session...</span>
-                )}
+                <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">Remote</span>
               </div>
-            ) : (
-              <>
-                <select
-                  className="rounded px-2 py-1 text-sm focus:ring-1 focus:ring-zinc-500 outline-none cursor-pointer appearance-none pr-8 font-semibold"
-                  style={{
-                    backgroundColor: darkMode ? 'transparent' : 'hsl(var(--secondary))',
-                    color: 'hsl(var(--foreground))',
-                    border: '1px solid hsl(var(--border))',
-                    colorScheme: darkMode ? 'dark' : 'light'
-                  }}
-                  value={connectionType}
-                  onChange={(e) => setConnectionType(e.target.value as 'Serial' | 'TCP' | 'SSH')}
-                  disabled={connected}
-                >
-                  <option value="Serial">Serial</option>
-                  <option value="TCP">TCP</option>
-                  <option value="SSH">SSH</option>
-                </select>
-                <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
-              </>
             )}
+            <>
+              <select
+                className="rounded px-2 py-1 text-sm focus:ring-1 focus:ring-zinc-500 outline-none cursor-pointer appearance-none pr-8 font-semibold"
+                style={{
+                  backgroundColor: darkMode ? 'transparent' : 'hsl(var(--secondary))',
+                  color: 'hsl(var(--foreground))',
+                  border: '1px solid hsl(var(--border))',
+                  colorScheme: darkMode ? 'dark' : 'light'
+                }}
+                value={connectionType}
+                onChange={(e) => setConnectionType(e.target.value as 'Serial' | 'TCP' | 'SSH')}
+                disabled={connected}
+              >
+                <option value="Serial">Serial</option>
+                <option value="TCP">TCP</option>
+                <option value="SSH">SSH</option>
+              </select>
+              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
+            </>
           </div>
 
           <div className="w-[1px] h-6 bg-border mx-1" />
@@ -1455,6 +1759,16 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               activePeriodicIds={activePeriodicIds}
               onStartPeriodic={startPeriodic}
               onStopPeriodic={stopPeriodic}
+              onRemoteParseRequest={(ext, content) => {
+                if (remoteChannel && typeof remoteChannel.send === 'function') {
+                  const reqBytes = new TextEncoder().encode(JSON.stringify({ ext, content }));
+                  const payload = new Uint8Array(2 + reqBytes.length);
+                  payload[0] = 0x02; // Control
+                  payload[1] = 0x0F; // Parse Project Request
+                  payload.set(reqBytes, 2);
+                  remoteChannel.send(payload);
+                }
+              }}
             />
             </div>
           )}
@@ -1531,14 +1845,23 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               setAutoScroll={setAutoScroll}
               onSendCommand={async (cmd: string) => {
                 try {
-                  if (connectionType === 'SSH') {
-                    const bytes = Array.from(new TextEncoder().encode(cmd));
-                    await safeInvoke("send_ssh_data", { tabId, data: bytes });
-                  } else if (connectionType === 'Remote' && remoteChannel) {
-                    const bytes = new TextEncoder().encode(cmd + '\r\n');
-                    const packet = new Uint8Array([0x01, ...bytes]); // 0x01 = Terminal Data
+                  if (!isTauri() && remoteChannel) {
+                    const isSsh = connectionType === 'SSH';
+                    const isTcp = connectionType === 'TCP';
+                    // SSH may not want \r\n added manually if the xterm/terminal handles it, but let's add it for consistency if needed.
+                    const suffix = isSsh ? '\n' : '\r\n';
+                    const bytes = new TextEncoder().encode(cmd + suffix);
+                    
+                    let typeByte = 0x01; // Serial
+                    if (isSsh) typeByte = 0x03;
+                    if (isTcp) typeByte = 0x04;
+                    
+                    const packet = new Uint8Array([typeByte, 1, ...bytes]); // 1 = TX direction
                     remoteChannel.send(packet);
                     addLog(`Sent remote command: ${cmd.trim()}`);
+                  } else if (connectionType === 'SSH') {
+                    const bytes = Array.from(new TextEncoder().encode(cmd + '\n'));
+                    await safeInvoke("send_ssh_data", { tabId, data: bytes });
                   } else if (connectionType === 'TCP') {
                     const bytes = Array.from(new TextEncoder().encode(cmd + '\r\n'));
                     await safeInvoke("send_tcp_data", { tabId, data: bytes });

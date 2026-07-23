@@ -1,6 +1,6 @@
 import { Project, Sequence, Reaction } from "../types";
 import { Plus, Save, Play, Upload, Edit, FastForward, Square, GripVertical, BookOpen, CheckSquare, Trash2, Search, FileDown, FileUp } from "lucide-react";
-import { safeInvoke, safeOpen, safeSave, safeConfirm, safeReadTextFile, safeWriteTextFile } from '../utils/tauri';
+import { safeInvoke, safeOpen, safeSave, safeConfirm, safeReadTextFile, safeWriteTextFile, isTauri } from '../utils/tauri';
 import { useState, useRef, useEffect } from "react";
 import {
     DndContext,
@@ -145,9 +145,10 @@ interface Props {
     activePeriodicIds: Set<string>;
     onStartPeriodic: (seq: Sequence) => void;
     onStopPeriodic: (seqId: string) => void;
+    onRemoteParseRequest?: (ext: string, content: string) => void;
 }
 
-export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEditReaction, connected, activePeriodicIds, onStartPeriodic, onStopPeriodic }: Props) {
+export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEditReaction, connected, activePeriodicIds, onStartPeriodic, onStopPeriodic, onRemoteParseRequest }: Props) {
     // Selection state
     const [isSelectionMode, setIsSelectionMode] = useState(false);
     const [selectedSeqIds, setSelectedSeqIds] = useState<Set<string>>(new Set());
@@ -258,10 +259,25 @@ export function ProjectSidebar({ project, onUpdate, onSend, onEditSequence, onEd
             const path = Array.isArray(pathRes) ? pathRes[0] : pathRes;
 
             let loaded: Project;
-            if (path.toLowerCase().endsWith('.ptp')) {
-                loaded = await safeInvoke<Project>("import_docklight_file", { path });
+            
+            if (!isTauri()) {
+                const content = await safeReadTextFile(path);
+                if (path.toLowerCase().endsWith('.ptp')) {
+                    if (onRemoteParseRequest) {
+                        onRemoteParseRequest('ptp', content);
+                    } else {
+                        alert("Remote parse request handler not provided.");
+                    }
+                    return; // The remote parse handler will update the project async
+                } else {
+                    loaded = JSON.parse(content) as Project;
+                }
             } else {
-                loaded = await safeInvoke<Project>("load_project_file", { path });
+                if (path.toLowerCase().endsWith('.ptp')) {
+                    loaded = await safeInvoke<Project>("import_docklight_file", { path });
+                } else {
+                    loaded = await safeInvoke<Project>("load_project_file", { path });
+                }
             }
 
             // Auto-fix legacy default names

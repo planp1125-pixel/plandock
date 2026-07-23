@@ -235,10 +235,7 @@ fn hex_to_ascii_repr(hex_str: &str) -> String {
     result
 }
 
-/// Import a Docklight .ptp file and convert to Plan Terminal Project
-pub fn import_ptp_file(path: &str) -> Result<Project, String> {
-    let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
-
+pub fn parse_ptp_content(content: &str, project_name: &str) -> Result<Project, String> {
     // Normalize line endings (CRLF -> LF)
     let content = content.replace("\r\n", "\n");
     let lines: Vec<&str> = content.lines().collect();
@@ -251,13 +248,6 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
     if lines[0].trim() != "VERSION" {
         return Err("Not a valid Docklight .ptp file (missing VERSION header)".to_string());
     }
-
-    // Extract project name from filename
-    let project_name = std::path::Path::new(path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Imported Project")
-        .to_string();
 
     let mut sequences: Vec<Sequence> = Vec::new();
     let mut reactions: Vec<Reaction> = Vec::new();
@@ -472,7 +462,7 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
     }
 
     Ok(Project {
-        name: project_name,
+        name: project_name.to_string(),
         send_sequences: sequences,
         reactions,
         file_path: None, // Set to None so "Save" will force a "Save As" as a new .plant file
@@ -481,4 +471,15 @@ pub fn import_ptp_file(path: &str) -> Result<Project, String> {
         tcp_config: None,
         ssh_config: None,
     })
+}
+
+/// Import a Docklight .ptp file and convert to Plan Terminal Project
+pub fn import_ptp_file(path: &str) -> Result<Project, String> {
+    let content = fs::read_to_string(path).map_err(|e| format!("Failed to read file: {}", e))?;
+    let project_name = std::path::Path::new(path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Imported Project")
+        .to_string();
+    parse_ptp_content(&content, &project_name)
 }

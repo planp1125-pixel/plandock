@@ -593,7 +593,8 @@ pub fn run() {
             connect_remote,
             share_manager::accept_remote_offer,
             share_manager::share_active_tab,
-            share_manager::send_remote_data
+            share_manager::send_remote_data,
+            share_manager::broadcast_state_sync
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

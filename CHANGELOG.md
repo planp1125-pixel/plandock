@@ -1,3 +1,4 @@
+
 # Changelog
 
 All notable changes to the **Plan Terminal** project will be documented in this file.
@@ -5,6 +6,25 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 ---
 
 ## [Unreleased]
+
+---
+
+## [0.5.11] - 2026-07-22
+
+### Release
+- **Release Build Trigger**: Version bump to `0.5.11` across Rust backend and React frontend.
+
+---
+
+## [0.5.10] - 2026-07-22
+
+### Added
+- **TCP Server Mode**: Implemented native `listen_tcp` listener support alongside client mode, allowing Plan Terminal to bind to local ports (`0.0.0.0`) and receive incoming TCP client connections directly.
+- **Universal Input Enablement**: Enabled interactive terminal command input bar across all active protocol types.
+
+### Fixed
+- **TCP Server Auto-Resume**: Automatically resumes TCP server listening state on reconnection and suppresses unnecessary disconnect alerts.
+- **React Variable Initialization Order**: Fixed a React initialization crash during component rendering.
 
 ---
 
