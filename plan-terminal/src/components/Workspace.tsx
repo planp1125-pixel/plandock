@@ -687,6 +687,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     }, 150);
   }, [tabId, onConnectionStatusChange]);
 
+  const broadcastHostStateRef = useRef<() => void>(() => { });
+
   const broadcastHostState = useCallback((overrideState?: Record<string, any>) => {
     if (isApplyingRemoteSyncRef.current) return;
     const stateObj = {
@@ -909,37 +911,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       setIsPlaybackPaused(false);
     });
 
-    const unlistenStateSync = safeListen<[string, string, number[]]>('remote-state-sync', (event) => {
-      const [, , bytes] = event.payload;
+    const unlistenStateSync = safeListen<any>('remote-state-sync', (event) => {
       try {
-        const payloadStr = new TextDecoder().decode(new Uint8Array(bytes.slice(1)));
+        const payloadStr = new TextDecoder().decode(new Uint8Array(event.payload[2].slice(1)));
         const state = JSON.parse(payloadStr);
-        isIncomingSyncRef.current = true;
-        if (state.protocol) setConnectionType(state.protocol);
-        if (state.activeProtocol) setActiveProtocol(state.activeProtocol);
-        if (state.portName) setSelectedPort(state.portName);
-        if (state.baudRate) setBaudRate(state.baudRate);
-        if (state.dataBits) setDataBits(state.dataBits);
-        if (state.stopBits) setStopBits(state.stopBits);
-        if (state.parity) setParity(state.parity);
-        if (state.flowControl) setFlowControl(state.flowControl);
-        if (state.tcpHost) setTcpHost(state.tcpHost);
-        if (state.tcpPort) setTcpPort(state.tcpPort);
-        if (state.tcpMode) setTcpMode(state.tcpMode);
-        if (state.sshHost) setSshHost(state.sshHost);
-        if (state.sshPort) setSshPort(state.sshPort);
-        if (state.sshUsername) setSshUsername(state.sshUsername);
-        if (typeof state.isRecording === 'boolean') setIsRecording(state.isRecording);
-        if (typeof state.connected === 'boolean') {
-          setConnected(state.connected);
-          onConnectionStatusChange(
-            tabId,
-            state.connected,
-            state.protocol === "Serial" ? (state.portName || "Serial") :
-              state.protocol === "TCP" ? (state.tcpMode === 'server' ? `Listening on ${state.tcpPort}` : state.tcpHost) :
-                state.protocol === "SSH" ? state.sshHost : "Remote"
-          );
-        }
+        applyRemoteStateSync(state);
       } catch (e) {
         console.error("Failed to parse remote-state-sync:", e);
       }
