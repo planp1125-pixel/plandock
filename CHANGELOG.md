@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.18] - 2026-07-24
+
+### Fixed
+- **Raspberry Pi ARM64 Multiarch Sysroot**: Added Ubuntu `dpkg --add-architecture arm64` multiarch package sysroot and `PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig"` with `PKG_CONFIG_ALLOW_CROSS=1` in GitHub Actions. Resolves `glib-sys` / `webkit2gtk-sys` cross-compilation errors cleanly.
+
+---
+
 ## [0.5.17] - 2026-07-24
 
 ### Fixed & Performance
