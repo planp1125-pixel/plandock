@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.15] - 2026-07-24
+
+### Added & Fixed
+- **Raspberry Pi Build Support**: Added native ARM64 compilation to the GitHub Actions release pipeline to automatically generate `.deb` and `.AppImage` packages for Raspberry Pi and other ARM64 Linux devices.
+
+---
+
 ## [0.5.14] - 2026-07-24
 
 ### Added & Fixed
