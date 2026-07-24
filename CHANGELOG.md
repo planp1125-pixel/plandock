@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.20] - 2026-07-24
+
+### Fixed
+- **Raspberry Pi ARM64 Single-Threaded Build Mode**: Configured `CARGO_BUILD_JOBS=1` and `RUSTFLAGS="-C codegen-units=1"` inside `run-on-arch-action` container to guarantee 100% stable completion of Raspberry Pi ARM64 `.deb` and `.AppImage` packages without QEMU memory segfaults.
+
+---
+
 ## [0.5.19] - 2026-07-24
 
 ### Fixed
