@@ -122,9 +122,7 @@ jobs:
             export RUSTFLAGS="-C codegen-units=1"
             cd plan-terminal
             npm install
-            npm run build
-            cargo install tauri-cli --version "^2.0.0" || true
-            cargo tauri build
+            npm run tauri build
             cp src-tauri/target/release/bundle/deb/*.deb /artifacts/ || true
             cp src-tauri/target/release/bundle/appimage/*.AppImage /artifacts/ || true
       - name: Upload Release Assets
