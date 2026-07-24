@@ -682,6 +682,23 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       );
     }
 
+    if (state.editingSeqId !== undefined) {
+      if (state.editingSeqId === null) {
+        setEditingSeq(null);
+      } else if (projectRef.current) {
+        const found = projectRef.current.send_sequences.find((s: Sequence) => s.id === state.editingSeqId);
+        if (found) setEditingSeq(found);
+      }
+    }
+    if (state.editingReactionId !== undefined) {
+      if (state.editingReactionId === null) {
+        setEditingReaction(null);
+      } else if (projectRef.current) {
+        const found = projectRef.current.reactions.find((r: Reaction) => r.id === state.editingReactionId);
+        if (found) setEditingReaction(found);
+      }
+    }
+
     setTimeout(() => {
       isApplyingRemoteSyncRef.current = false;
     }, 150);
@@ -710,6 +727,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       sshAuthMode,
       sshAuthSecret,
       isRecording,
+      editingSeqId: editingSeq ? editingSeq.id : null,
+      editingReactionId: editingReaction ? editingReaction.id : null,
       ...overrideState
     };
 
@@ -2032,8 +2051,14 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                   }
                 }}
                 onSend={handleSend}
-                onEditSequence={setEditingSeq}
-                onEditReaction={setEditingReaction}
+                onEditSequence={(seq) => {
+                  setEditingSeq(seq);
+                  broadcastHostState({ editingSeqId: seq ? seq.id : null });
+                }}
+                onEditReaction={(r) => {
+                  setEditingReaction(r);
+                  broadcastHostState({ editingReactionId: r ? r.id : null });
+                }}
                 connected={connected}
                 activePeriodicIds={activePeriodicIds}
                 onStartPeriodic={startPeriodic}
@@ -2200,11 +2225,20 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         <SequenceEditor
           sequence={editingSeq}
           isOpen={true}
-          onClose={() => setEditingSeq(null)}
-          onSave={updateSequence}
+          onClose={() => {
+            setEditingSeq(null);
+            broadcastHostState({ editingSeqId: null });
+          }}
+          onSave={(updatedSeq) => {
+            updateSequence(updatedSeq);
+            setEditingSeq(null);
+            broadcastHostState({ editingSeqId: null });
+          }}
           onDelete={(seq: Sequence) => {
             const newSeqs = project.send_sequences.filter((s: Sequence) => s.id !== seq.id);
             setProject({ ...project, send_sequences: newSeqs });
+            setEditingSeq(null);
+            broadcastHostState({ editingSeqId: null });
           }}
           existingGroups={Array.from(new Set(project.send_sequences.map(s => s.group).filter(Boolean))) as string[]}
           onSend={handleSend}
@@ -2215,17 +2249,23 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           reaction={editingReaction}
           sequences={project.send_sequences}
           isOpen={true}
-          onClose={() => setEditingReaction(null)}
+          onClose={() => {
+            setEditingReaction(null);
+            broadcastHostState({ editingReactionId: null });
+          }}
           onSave={(updated: Reaction) => {
             const newReactions = project.reactions.map((r: Reaction) => r.id === updated.id ? updated : r);
             setProject({ ...project, reactions: newReactions });
             onProjectNameChange(tabId, project.name);
             setEditingReaction(null);
+            broadcastHostState({ editingReactionId: null });
           }}
           onDelete={(r: Reaction) => {
             const newReactions = project.reactions.filter((reaction: Reaction) => reaction.id !== r.id);
             setProject({ ...project, reactions: newReactions });
             onProjectNameChange(tabId, project.name);
+            setEditingReaction(null);
+            broadcastHostState({ editingReactionId: null });
           }}
         />
       )}
