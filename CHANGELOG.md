@@ -13,6 +13,7 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ### Added & Fixed
 - **Live Sequence & Reaction Popup Modal Mirroring**: Opening the Sequence or Reaction Editor modal on either Host or Web Viewer automatically opens the exact same popup modal on the remote screen in real-time. Closing or saving closes both modals simultaneously.
+- **Automated Public Releases**: Fixed GitHub Actions release pipeline to publish packages publicly immediately (disabled draft mode).
 - **Remote Hardware Connection Trigger & Error Mirroring**: Clicking "Connect" on the Web App triggers physical port opening on the Host desktop. If connection fails (e.g. invalid serial port, TCP refused, SSH auth failed), the error popup is mirrored directly to the Web App.
 - **WebRTC Control Channel JSON Slicing Fix**: Fixed a Rust control message parsing bug where leading `0x0B` control sub-type bytes caused JSON deserialization errors during remote connect requests.
 - **TCP Server Mode Socket Address & Port Reuse**: Configured `socket2` with `SO_REUSEADDR` and `SO_REUSEPORT` flags and added global `disconnect_all()` clean-up to prevent `Bind failed: Address already in use (os error 98)` on TCP server re-binds.

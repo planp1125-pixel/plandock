@@ -37,7 +37,7 @@ jobs:
           tagName: app-${{ github.ref_name }} # title for release
           releaseName: "Plan Terminal ${{ github.ref_name }}"
           releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           projectPath: plan-terminal
 
@@ -62,7 +62,7 @@ jobs:
           tagName: app-${{ github.ref_name }}
           releaseName: "Plan Terminal ${{ github.ref_name }}"
           releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           projectPath: plan-terminal
           args: --target x86_64-pc-windows-msvc
@@ -88,7 +88,7 @@ jobs:
           tagName: app-${{ github.ref_name }}
           releaseName: "Plan Terminal ${{ github.ref_name }}"
           releaseBody: "See the assets to download this version and install."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           projectPath: plan-terminal
           args: --bundles app,dmg
