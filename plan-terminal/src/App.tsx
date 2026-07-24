@@ -3,7 +3,7 @@ import { Workspace } from "./components/Workspace";
 import { safeInvoke, safeListen } from './utils/tauri';
 import { LicenseDialog } from "./components/LicenseDialog";
 import { LicenseProvider } from "./contexts/LicenseContext";
-import { Moon, Sun, Crown, X, Plus, Share2, Users } from "lucide-react";
+import { Moon, Sun, Crown, X, Plus, Share2, Users, Unplug, LogOut } from "lucide-react";
 
 import logo from "./assets/logo.png";
 import { RemoteAccessDialog } from "./components/RemoteAccessDialog";
@@ -59,9 +59,7 @@ function App() {
 
   useEffect(() => {
     if (isWebViewer && webTargetId && signaling && deviceId && !hasConnected.current) {
-      hasConnected.current = true;
-      console.log("[WebViewer] Auto-connecting to:", webTargetId);
-      signaling.connectTo(webTargetId).catch(e => console.error("WebConnect error", e));
+      // Intentionally not auto-connecting. User will click "Connect" in Workspace.
     }
   }, [isWebViewer, webTargetId, signaling, deviceId]);
 
@@ -212,7 +210,7 @@ function App() {
         <div className="flex items-center flex-1 overflow-x-auto h-full pr-4">
           <div className="flex items-center justify-center gap-1.5 mr-4 shrink-0 pl-1">
             <img src={logo} alt="Plan Terminal" className="w-5 h-5 pointer-events-none" />
-            <span className="text-[10px] text-muted-foreground font-medium select-none">v0.5.11</span>
+            <span className="text-[10px] text-muted-foreground font-medium select-none">v0.5.13</span>
           </div>
 
           <div className="flex items-end h-full pt-1.5 overflow-x-auto select-none no-scrollbar">
@@ -290,69 +288,142 @@ function App() {
         </div>
       </header>
 
-      {/* INCOMING CALL BANNER */}
+      {/* Incoming Call Dialog */}
       {incomingCall && (
-        <div className="bg-blue-600 text-white px-4 py-2 flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-300">
-          <div className="flex items-center gap-3">
-            <Share2 className="w-4 h-4 animate-pulse" />
-            <span className="text-xs font-bold">Incoming WebRTC Call from <span className="font-mono">{incomingCall.fromId}</span></span>
-          </div>
-          <div className="flex gap-2">
-            <button
-              onClick={incomingCall.reject}
-              className="px-3 py-1 text-[10px] uppercase font-bold hover:bg-black/10 rounded"
-            >
-              Ignore
-            </button>
-            <button
-              onClick={async () => {
-                const callerId = incomingCall.fromId;
-                await incomingCall.accept();
-                // Auto-share the currently active tab with this caller (AnyDesk Style)
-                if (activeTabId && !activeTabId.startsWith('remote-')) {
-                   // Dispatch an event to the active Workspace to perform the share + sync
-                   window.dispatchEvent(new CustomEvent('trigger-tab-share', { 
-                     detail: { tabId: activeTabId, peerId: callerId } 
-                   }));
-                   console.log(`[Auto-Share] Triggered share for ${activeTabId} to ${callerId}`);
-                }
-              }}
-              className="bg-white text-blue-600 px-4 py-1 rounded shadow-md text-[10px] font-bold uppercase transition-transform active:scale-95"
-            >
-              Accept
-            </button>
+        <div className="fixed inset-0 z-[200] bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-card p-6 rounded-lg shadow-2xl max-w-sm w-full border animate-in zoom-in duration-200">
+            <h2 className="text-lg font-bold mb-2 text-foreground">Incoming Connection</h2>
+            <p className="text-sm text-zinc-400 mb-6">Device ID <span className="font-mono text-blue-500 font-bold">{incomingCall.fromId}</span> is requesting to connect.</p>
+            <div className="flex justify-end gap-3">
+              <button
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded font-medium transition-colors"
+                onClick={incomingCall.reject}
+              >
+                Reject
+              </button>
+              <button
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-bold shadow-lg transition-colors"
+                onClick={async () => {
+                  const callerId = incomingCall.fromId;
+                  await incomingCall.accept();
+                  // Auto-share the currently active tab with this caller (AnyDesk Style)
+                  if (activeTabId && !activeTabId.startsWith('remote-')) {
+                     // Dispatch an event to the active Workspace to perform the share + sync
+                     window.dispatchEvent(new CustomEvent('trigger-tab-share', { 
+                       detail: { tabId: activeTabId, peerId: callerId } 
+                     }));
+                     console.log(`[Auto-Share] Triggered share for ${activeTabId} to ${callerId}`);
+                  }
+                }}
+              >
+                Accept
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col min-h-0 bg-background relative">
-        {/* Remote Status Indicator (Visible when sharing or connected) */}
-        {(isSharing || Object.keys(activePeers).length > 0) && (
-          <div className="bg-blue-600/10 border-b border-blue-500/20 px-3 py-1 flex items-center justify-between animate-in slide-in-from-top duration-300">
+        {/* Web Viewer Top Status Bar */}
+        {isWebViewer && (
+          <div className="bg-gradient-to-r from-blue-950/80 via-zinc-900 to-blue-950/80 border-b border-blue-500/30 px-3 py-1.5 flex items-center justify-between shadow-sm shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <div className="flex flex-col">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-blue-400">
+                  Remote Session Connected
+                </span>
+                <span className="text-[10px] text-zinc-400 font-mono">
+                  Host ID: <span className="text-zinc-200 font-bold">{webTargetId || tabs[0]?.peerId || "Host"}</span> | Your Request ID: <span className="text-blue-400 font-bold">{signaling?.myId || deviceId || "Client"}</span>
+                </span>
+              </div>
+            </div>
+            
+            <button
+              onClick={() => {
+                if (window.confirm("Disconnect from remote session?")) {
+                  tabs.forEach(t => {
+                    if (t.remoteChannel && t.remoteChannel.close) {
+                      try { t.remoteChannel.close(); } catch(e) {}
+                    }
+                  });
+                  window.location.reload();
+                }
+              }}
+              className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold uppercase tracking-wider flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
+              title="Disconnect Remote Session"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Disconnect Remote Session
+            </button>
+          </div>
+        )}
+
+        {/* Desktop Host Top Status Bar */}
+        {!isWebViewer && (isSharing || Object.keys(activePeers).length > 0) && (
+          <div className="bg-gradient-to-r from-zinc-900 via-blue-950/30 to-zinc-900 border-b border-blue-500/20 px-3 py-1.5 flex items-center justify-between shadow-sm shrink-0">
             <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isSharing ? 'bg-green-500 animate-pulse' : 'bg-zinc-500'}`} />
-              <span className="text-[10px] font-bold uppercase tracking-tight text-blue-500">
-                {isSharing ? `Hosting: ${deviceName || 'Unnamed'}` : 'Remote Engine Standby'}
+              <div className={`w-2 h-2 rounded-full ${isSharing ? 'bg-green-500 animate-pulse' : 'bg-amber-500'}`} />
+              <span className="text-[10px] font-bold uppercase tracking-tight text-blue-400">
+                {isSharing ? `Hosting: ${deviceName || 'Host Engine'}` : 'Remote Standby'}
               </span>
-              {Object.keys(activePeers).length > 0 && (
-                <div className="flex items-center gap-1.5 ml-3 pl-3 border-l border-blue-500/20">
-                  <span className="text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded-full font-bold">
-                    {Object.keys(activePeers).length} PEERS
+              {Object.keys(activePeers).length > 0 ? (
+                <div className="flex items-center gap-2 ml-3 pl-3 border-l border-blue-500/20">
+                  <span className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded-full font-bold">
+                    {Object.keys(activePeers).length} Active Viewer{Object.keys(activePeers).length > 1 ? 's' : ''}
                   </span>
-                  <span className="text-[9px] text-blue-500/70 font-mono">
-                    {Object.keys(activePeers).map(p => p.slice(0, 11)).join(', ')}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    {Object.keys(activePeers).map(pid => (
+                      <div key={pid} className="flex items-center gap-1 bg-zinc-800 border border-zinc-700/80 px-2 py-0.5 rounded text-[10px] font-mono text-zinc-300">
+                        <span>{pid.slice(0, 11)}</span>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await safeInvoke("disconnect_peer", { peerId: pid });
+                            } catch(e) {}
+                          }}
+                          className="p-0.5 hover:text-red-400 transition-colors ml-0.5"
+                          title={`Disconnect ${pid}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
+              ) : (
+                <span className="text-[10px] text-zinc-400 italic ml-2">Waiting for remote connections...</span>
               )}
             </div>
-            <button
-              onClick={() => setShowRemoteDialog(true)}
-              className="text-[9px] font-bold text-blue-500 hover:text-blue-400 uppercase flex items-center gap-1 transition-colors"
-            >
-              <Users className="w-3 h-3" />
-              Manage Hub
-            </button>
+
+            <div className="flex items-center gap-2">
+              {Object.keys(activePeers).length > 0 && (
+                <button
+                  onClick={async () => {
+                    const pids = Object.keys(activePeers);
+                    for (const pid of pids) {
+                      try {
+                        await safeInvoke("disconnect_peer", { peerId: pid });
+                      } catch (e) {}
+                    }
+                  }}
+                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold uppercase tracking-wider shadow-sm flex items-center gap-1.5 active:scale-95 transition-all cursor-pointer"
+                  title="Disconnect all connected remote viewers"
+                >
+                  <Unplug className="w-3.5 h-3.5" />
+                  Disconnect All Remote Sessions
+                </button>
+              )}
+              
+              <button
+                onClick={() => setShowRemoteDialog(true)}
+                className="text-[9px] font-bold text-blue-400 hover:text-blue-300 uppercase flex items-center gap-1 transition-colors px-2 py-1 bg-blue-500/10 rounded border border-blue-500/20"
+              >
+                <Users className="w-3 h-3" />
+                Hub Settings
+              </button>
+            </div>
           </div>
         )}
 

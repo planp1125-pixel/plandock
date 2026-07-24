@@ -53,6 +53,7 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
             // Handle WebRTC Offers received by Rust (Host side)
             unlistenOffer = await safeListen<[string, string]>('remote-offer', (event) => {
+                console.log("[RemoteContext] Received remote-offer event payload:", event.payload);
                 const [fromId, sdp] = event.payload;
                 setIncomingCall({
                     fromId,

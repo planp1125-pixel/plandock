@@ -632,12 +632,13 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
         }
     } else if label == "serial-bridge" {
         // HOST-SIDE: Map the generic mirror channel to the 'main' tab by default
-        // This allows commands from the Web client to hit the real serial port.
         println!("[WEBRTC] Mapping generic bridge '{}' to 'main' tab on HOST", label);
         DC_TAB_MAP.insert("serial-bridge".to_string(), "main".to_string());
         
-        // Notify frontend that the bridge is ready
+        // Notify frontend that the peer and bridge are ready
         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+            use tauri::Emitter;
+            let _ = ctx.app.emit("remote-peer-connected", peer_id.clone());
             let _ = ctx.app.emit("remote-channel-open", (peer_id.clone(), label.clone()));
         }
     }
@@ -835,24 +836,29 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                         let protocol = config["protocol"].as_str().unwrap_or("Serial");
                         let tab_id = "main".to_string(); // Host always uses 'main'
                         
-                        if protocol == "Serial" {
-                            let serial_config = crate::serial_manager::SerialConfig {
-                                port_name: config["portName"].as_str().unwrap_or("").to_string(),
-                                baud_rate: config["baudRate"].as_u64().unwrap_or(115200) as u32,
-                                data_bits: config["dataBits"].as_u64().unwrap_or(8) as u8,
-                                flow_control: config["flowControl"].as_str().unwrap_or("None").to_string(),
-                                parity: config["parity"].as_str().unwrap_or("None").to_string(),
-                                stop_bits: config["stopBits"].as_u64().unwrap_or(1) as u8,
-                            };
-                            let _ = ctx.serial.open_port(ctx.app.clone(), &tab_id, serial_config);
+                        let res = if protocol == "Serial" {
+                            let port_name = config["portName"].as_str().unwrap_or("");
+                            if port_name.is_empty() {
+                                Err("No serial port selected".to_string())
+                            } else {
+                                let serial_config = crate::serial_manager::SerialConfig {
+                                    port_name: port_name.to_string(),
+                                    baud_rate: config["baudRate"].as_u64().unwrap_or(115200) as u32,
+                                    data_bits: config["dataBits"].as_u64().unwrap_or(8) as u8,
+                                    flow_control: config["flowControl"].as_str().unwrap_or("None").to_string(),
+                                    parity: config["parity"].as_str().unwrap_or("None").to_string(),
+                                    stop_bits: config["stopBits"].as_u64().unwrap_or(1) as u8,
+                                };
+                                ctx.serial.open_port(ctx.app.clone(), &tab_id, serial_config).map_err(|e| e.to_string())
+                            }
                         } else if protocol == "TCP" {
                             let host = config["tcpHost"].as_str().unwrap_or("127.0.0.1").to_string();
                             let port = config["tcpPort"].as_u64().unwrap_or(8080) as u16;
                             let tcp_mode = config["tcpMode"].as_str().unwrap_or("client");
                             if tcp_mode == "server" {
-                                let _ = ctx._tcp.listen(ctx.app.clone(), &tab_id, &host, port);
+                                ctx._tcp.listen(ctx.app.clone(), &tab_id, &host, port).map_err(|e| e.to_string())
                             } else {
-                                let _ = ctx._tcp.connect(ctx.app.clone(), &tab_id, &host, port);
+                                ctx._tcp.connect(ctx.app.clone(), &tab_id, &host, port).map_err(|e| e.to_string())
                             }
                         } else if protocol == "SSH" {
                             let host = config["sshHost"].as_str().unwrap_or("").to_string();
@@ -861,11 +867,21 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                             let auth_mode = config["sshAuthMode"].as_str().unwrap_or("password").to_string();
                             let auth_secret = config["sshAuthSecret"].as_str().unwrap_or("").to_string();
                             
-                            let _ = ctx.ssh.connect(ctx.app.clone(), &tab_id, &host, port, &username, &auth_mode, &auth_secret);
-                        }
+                            ctx.ssh.connect(ctx.app.clone(), &tab_id, &host, port, &username, &auth_mode, &auth_secret).map_err(|e| e.to_string())
+                        } else {
+                            Err("Unknown protocol".to_string())
+                        };
 
                         use tauri::Emitter;
-                        let _ = ctx.app.emit("remote-connect-applied", config);
+                        match res {
+                            Ok(_) => {
+                                let _ = ctx.app.emit("remote-connect-applied", config);
+                            }
+                            Err(err_msg) => {
+                                println!("[REMOTE] Connect failed on host: {}", err_msg);
+                                let _ = ctx.app.emit("remote-connect-failed", err_msg);
+                            }
+                        }
                     }
                 }
             }
@@ -918,6 +934,13 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                 let _ = ctx.app.emit("remote-recording-sync", (peer_id, d.label().to_owned(), payload_vec));
             }
         }
+        0x14 => { // Media Signal (Viewer <-> Host for Video/Screen Sharing)
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let payload_vec = payload.to_vec();
+                let _ = ctx.app.emit("remote-media-signal", (peer_id, d.label().to_owned(), payload_vec));
+            }
+        }
         _ => {}
     }
 }
@@ -933,6 +956,34 @@ pub async fn broadcast_state_sync(state_json: String) -> Result<(), String> {
             if ch.ready_state() == RTCDataChannelState::Open {
                 let _ = ch.send(&payload.clone().into()).await;
             }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn broadcast_media_signal(signal_json: String) -> Result<(), String> {
+    let mut payload = vec![0x02, 0x14]; // Control -> Media Signal
+    payload.extend_from_slice(signal_json.as_bytes());
+
+    for kv in SHARE_MANAGER.peers.iter() {
+        let peer = kv.value();
+        for ch in &peer.channels {
+            if ch.ready_state() == RTCDataChannelState::Open {
+                let _ = ch.send(&payload.clone().into()).await;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn disconnect_peer(peer_id: String) -> Result<(), String> {
+    if let Some((_, old_peer)) = SHARE_MANAGER.peers.remove(&peer_id) {
+        let _ = old_peer.pc.close().await;
+        if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+            use tauri::Emitter;
+            let _ = ctx.app.emit("remote-peer-disconnected", peer_id.clone());
         }
     }
     Ok(())

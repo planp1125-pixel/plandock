@@ -170,13 +170,29 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
                                                 <p className="text-[9px] text-muted-foreground uppercase tracking-widest leading-none">P2P Established</p>
                                             </div>
                                         </div>
-                                        <button
-                                            onClick={() => handleShareTab(peer.id)}
-                                            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold uppercase shadow-sm active:scale-95 transition-all flex items-center gap-1.5"
-                                        >
-                                            <MonitorUp className="w-3 h-3" />
-                                            Share Tab
-                                        </button>
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={() => handleShareTab(peer.id)}
+                                                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[10px] font-bold uppercase shadow-sm active:scale-95 transition-all flex items-center gap-1.5"
+                                            >
+                                                <MonitorUp className="w-3 h-3" />
+                                                Share Tab
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        await safeInvoke("disconnect_peer", { peerId: peer.id });
+                                                    } catch(e) {
+                                                        alert("Disconnect failed: " + e);
+                                                    }
+                                                }}
+                                                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold uppercase shadow-sm active:scale-95 transition-all flex items-center gap-1.5"
+                                                title="Disconnect Peer"
+                                            >
+                                                <X className="w-3 h-3" />
+                                                Drop
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>

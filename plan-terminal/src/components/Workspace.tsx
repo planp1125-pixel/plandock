@@ -6,7 +6,7 @@ import { SequenceEditor } from "./SequenceEditor";
 import { ReactionEditor } from "./ReactionEditor";
 import { Project, Sequence, Reaction, PortInfo } from "../types";
 import { parseData, filterAnsi } from "../utils";
-import { RotateCw, Settings, ChevronDown, LineChart as LineChartIcon, Download, FileText, Globe, MonitorUp, PanelLeftClose, PanelLeft } from "lucide-react";
+import { RotateCw, Settings, ChevronDown, LineChart as LineChartIcon, Download, FileText, Globe, MonitorUp, PanelLeftClose, PanelLeft, Unplug, VideoOff } from "lucide-react";
 import { ChartWindow } from "./ChartWindow";
 import { ChartConfig, ChartDataPoint, extractValue } from "../chart_utils";
 import { useLicense, FREE_LIMITS } from "../contexts/LicenseContext";
@@ -14,7 +14,7 @@ import { handleTerminalExport } from "../utils/export";
 import { useRemote } from "../contexts/RemoteContext";
 
 export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusChange, onProjectNameChange, autoScroll, setAutoScroll, remoteChannel, peerId, activePeers: propsActivePeers }: { tabId: string, isActive: boolean, darkMode: boolean, onConnectionStatusChange: (tabId: string, isConnected: boolean, label: string) => void, onProjectNameChange: (tabId: string, name: string) => void, autoScroll: boolean, setAutoScroll: (val: boolean) => void, remoteChannel?: any, peerId?: string, activePeers?: any }) => {
-  const { activePeers: contextActivePeers, addLog, isSharing } = useRemote();
+  const { activePeers: contextActivePeers, addLog, isSharing, signaling } = useRemote();
   const activePeers = propsActivePeers || contextActivePeers || {};
 
   const activePeersRef = useRef(activePeers);
@@ -48,11 +48,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         };
         const bytes = new TextEncoder().encode(JSON.stringify(statePacket));
         const packet = new Uint8Array([0x02, 0x04, ...bytes]); // 0x02=Control, 0x04=StateSync
-        
+
         if (typeof channel.send === 'function') {
-           channel.send(packet);
+          channel.send(packet);
         } else {
-           safeInvoke("send_remote_data", { peerId, label: "serial-bridge", data: Array.from(packet) });
+          safeInvoke("send_remote_data", { peerId, label: "serial-bridge", data: Array.from(packet) });
         }
         addLog(`Shared tab ${tabId} & synced state with ${peerId}`);
       };
@@ -61,7 +61,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       const currentPeers = activePeersRef.current;
       const peer = currentPeers[peerId];
       if (peer && (peer.channel || peer.label)) {
-        const channelObj = peer.channel || { label: peer.label, readyState: 'open' }; 
+        const channelObj = peer.channel || { label: peer.label, readyState: 'open' };
         if (channelObj.readyState === 'open') {
           syncState(channelObj);
         } else {
@@ -118,6 +118,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [isChartOpen, setIsChartOpen] = useState(false);
   const [chartConfigs, setChartConfigs] = useState<ChartConfig[]>([]);
   const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+
+  // Screen Share State
+  const [isSharingScreen, setIsSharingScreen] = useState(false);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaPeerRef = useRef<RTCPeerConnection | null>(null);
 
   // Refs for Chart to access latest state in listeners
   const chartConfigsRef = useRef<ChartConfig[]>(project.chart_configs || []);
@@ -182,10 +189,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         });
         if (selectedPath) {
           try {
-             await safeWriteTextFile(selectedPath as string, recordingBufferRef.current.join("\n") + "\n");
-             alert("Session recording saved successfully.");
+            await safeWriteTextFile(selectedPath as string, recordingBufferRef.current.join("\n") + "\n");
+            alert("Session recording saved successfully.");
           } catch (e) {
-             alert("Failed to save recording: " + String(e));
+            alert("Failed to save recording: " + String(e));
           }
         }
         recordingBufferRef.current = [];
@@ -257,10 +264,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         });
         if (path) {
           try {
-             await safeWriteTextFile(path as string, liveLogBufferRef.current.join("\n") + "\n");
-             alert("Log file saved successfully.");
+            await safeWriteTextFile(path as string, liveLogBufferRef.current.join("\n") + "\n");
+            alert("Log file saved successfully.");
           } catch (e) {
-             alert("Failed to save log: " + String(e));
+            alert("Failed to save log: " + String(e));
           }
         }
         liveLogBufferRef.current = [];
@@ -320,7 +327,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 alert("Recording buffer limit reached (100,000 logs). Recording auto-stopped. Please click the Record button again to save the file.");
               } else {
                 const date = new Date(item.ts);
-                const timeStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}000`;
+                const timeStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}000`;
                 const asciiStr = String.fromCharCode(...item.bytes.map(b => (b >= 32 && b < 127) ? b : 46)).replace(/"/g, '\\"').replace(/\\/g, '\\\\');
                 recordingBufferRef.current.push(`{"ts":${item.ts},"time":"${timeStr}","dir":"${item.dir}","data":[${item.bytes.join(',')}],"ascii":"${asciiStr}"}`);
               }
@@ -332,8 +339,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 alert("Live Log buffer limit reached (100,000 logs). Logging auto-stopped.");
               } else {
                 const date = new Date(item.ts);
-                const timeStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}000`;
-                
+                const timeStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}.${String(date.getMilliseconds()).padStart(3, '0')}000`;
+
                 let formattedData = "";
                 if (exportAscii) {
                   formattedData = String.fromCharCode(...item.bytes.map(b => (b >= 32 && b < 127) ? b : 46));
@@ -414,6 +421,110 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   }, [remoteChannel]);
   const [remoteDeviceId, setRemoteDeviceId] = useState('');
 
+  // --- Screen Sharing Logic ---
+  const sendMediaSignal = async (payload: any) => {
+    const jsonStr = JSON.stringify(payload);
+    if (isTauri()) {
+      await safeInvoke('broadcast_media_signal', { signalJson: jsonStr });
+    } else {
+      if (remoteChannel && remoteChannel.readyState === 'open') {
+        const bytes = new TextEncoder().encode(jsonStr);
+        const packet = new Uint8Array(2 + bytes.length);
+        packet[0] = 0x02; // Control
+        packet[1] = 0x14; // Media Signal
+        packet.set(bytes, 2);
+        remoteChannel.send(packet);
+      }
+    }
+  };
+
+  const setupMediaPeerConnection = () => {
+    if (mediaPeerRef.current) {
+      mediaPeerRef.current.close();
+    }
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    });
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        sendMediaSignal({ type: 'candidate', candidate: event.candidate });
+      }
+    };
+
+    pc.ontrack = (event) => {
+      console.log("[Media] Track received from remote peer:", event.streams);
+      if (event.streams && event.streams[0]) {
+        mediaStreamRef.current = event.streams[0];
+        setIsSharingScreen(true);
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = event.streams[0];
+          remoteVideoRef.current.play().catch(e => console.warn("[Media] Play error:", e));
+        }
+      }
+    };
+
+    mediaPeerRef.current = pc;
+    return pc;
+  };
+
+  const mediaPendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+
+  const handleMediaSignal = async (payloadStr: string) => {
+    try {
+      const signal = JSON.parse(payloadStr);
+      if (signal.type === 'stop') {
+        if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+        if (mediaPeerRef.current) {
+          mediaPeerRef.current.close();
+          mediaPeerRef.current = null;
+        }
+        setIsSharingScreen(false);
+        mediaPendingCandidatesRef.current = [];
+        return;
+      }
+
+      let pc = mediaPeerRef.current;
+
+      if (signal.type === 'offer') {
+        setIsSharingScreen(true);
+        pc = setupMediaPeerConnection();
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: signal.sdp }));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        await sendMediaSignal({ type: 'answer', sdp: answer.sdp });
+
+        // Process queued candidates
+        for (const cand of mediaPendingCandidatesRef.current) {
+          await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(e => console.error(e));
+        }
+        mediaPendingCandidatesRef.current = [];
+      } else if (signal.type === 'answer') {
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: signal.sdp }));
+          // Process queued candidates
+          for (const cand of mediaPendingCandidatesRef.current) {
+            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(e => console.error(e));
+          }
+          mediaPendingCandidatesRef.current = [];
+        }
+      } else if (signal.type === 'candidate') {
+        if (pc && pc.remoteDescription) {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(e => console.error(e));
+        } else {
+          console.log("[Media] Queuing ICE candidate for video stream");
+          mediaPendingCandidatesRef.current.push(signal.candidate);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to handle media signal", e);
+    }
+  };
+  // --- End Screen Sharing Logic ---
+
   // Handle Remote DataChannel
   useEffect(() => {
     if (!remoteChannel) return;
@@ -470,9 +581,9 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               if (typeof syncData.connected === 'boolean') {
                 setConnected(syncData.connected);
                 if (syncData.connected) {
-                    onConnectionStatusChange(tabId, true, syncData.connectionType === "Serial" ? syncData.project.serial_config?.port_name : "Connected");
+                  onConnectionStatusChange(tabId, true, syncData.connectionType === "Serial" ? syncData.project.serial_config?.port_name : "Connected");
                 } else {
-                    onConnectionStatusChange(tabId, false, "Disconnected");
+                  onConnectionStatusChange(tabId, false, "Disconnected");
                 }
               }
               if (syncData.ports) {
@@ -488,34 +599,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           try {
             const payloadStr = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
             const state = JSON.parse(payloadStr);
-            isIncomingSyncRef.current = true;
-            if (state.protocol) setConnectionType(state.protocol);
-            if (state.activeProtocol) setActiveProtocol(state.activeProtocol);
-            if (state.portName) setSelectedPort(state.portName);
-            if (state.baudRate) setBaudRate(state.baudRate);
-            if (state.dataBits) setDataBits(state.dataBits);
-            if (state.stopBits) setStopBits(state.stopBits);
-            if (state.parity) setParity(state.parity);
-            if (state.flowControl) setFlowControl(state.flowControl);
-            if (state.tcpHost) setTcpHost(state.tcpHost);
-            if (state.tcpPort) setTcpPort(state.tcpPort);
-            if (state.tcpMode) setTcpMode(state.tcpMode);
-            if (state.sshHost) setSshHost(state.sshHost);
-            if (state.sshPort) setSshPort(state.sshPort);
-            if (state.sshUsername) setSshUsername(state.sshUsername);
-            if (state.sshAuthMode) setSshAuthMode(state.sshAuthMode);
-            if (state.sshAuthSecret !== undefined) setSshAuthSecret(state.sshAuthSecret);
-            if (typeof state.isRecording === 'boolean') setIsRecording(state.isRecording);
-            if (typeof state.connected === 'boolean') {
-              setConnected(state.connected);
-              onConnectionStatusChange(
-                tabId,
-                state.connected,
-                state.protocol === "Serial" ? (state.portName || "Serial") :
-                state.protocol === "TCP" ? (state.tcpMode === 'server' ? `Listening on ${state.tcpPort}` : state.tcpHost) :
-                state.protocol === "SSH" ? state.sshHost : "Remote"
-              );
-            }
+            applyRemoteStateSync(state);
           } catch (err) {
             console.error("Failed to parse state sync:", err);
           }
@@ -529,6 +613,14 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             }
           } catch (err) {
             console.error("Failed to parse recording sync:", err);
+          }
+        } else if (bytes[1] === 0x14) {
+          // Media Signal (Video)
+          try {
+            const payloadStr = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
+            handleMediaSignal(payloadStr);
+          } catch (e) {
+            console.error("Failed to parse media signal:", e);
           }
         }
       }
@@ -554,11 +646,49 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [sshAuthSecret, setSshAuthSecret] = useState('');
 
   const tcpStateRef = useRef({ type: connectionType, mode: tcpMode, port: tcpPort });
-  
-  const broadcastHostStateRef = useRef<() => void>(() => {});
 
-  const broadcastHostState = useCallback(() => {
-    if (!isTauri()) return;
+  const isApplyingRemoteSyncRef = useRef(false);
+
+  const applyRemoteStateSync = useCallback((state: any) => {
+    isApplyingRemoteSyncRef.current = true;
+    if (state.protocol) {
+      setConnectionType(state.protocol);
+      setProject(p => ({ ...p, connection_type: state.protocol }));
+    }
+    if (state.activeProtocol !== undefined) setActiveProtocol(state.activeProtocol);
+    if (state.portName !== undefined) setSelectedPort(state.portName);
+    if (state.baudRate !== undefined) setBaudRate(Number(state.baudRate));
+    if (state.dataBits !== undefined) setDataBits(Number(state.dataBits));
+    if (state.stopBits !== undefined) setStopBits(Number(state.stopBits));
+    if (state.parity !== undefined) setParity(state.parity);
+    if (state.flowControl !== undefined) setFlowControl(state.flowControl);
+    if (state.tcpHost !== undefined) setTcpHost(state.tcpHost);
+    if (state.tcpPort !== undefined) setTcpPort(Number(state.tcpPort));
+    if (state.tcpMode !== undefined) setTcpMode(state.tcpMode);
+    if (state.sshHost !== undefined) setSshHost(state.sshHost);
+    if (state.sshPort !== undefined) setSshPort(Number(state.sshPort));
+    if (state.sshUsername !== undefined) setSshUsername(state.sshUsername);
+    if (state.sshAuthMode !== undefined) setSshAuthMode(state.sshAuthMode);
+    if (state.sshAuthSecret !== undefined) setSshAuthSecret(state.sshAuthSecret);
+    if (typeof state.isRecording === 'boolean') setIsRecording(state.isRecording);
+    if (typeof state.connected === 'boolean') {
+      setConnected(state.connected);
+      onConnectionStatusChange(
+        tabId,
+        state.connected,
+        state.protocol === "Serial" ? (state.portName || "Serial") :
+          state.protocol === "TCP" ? (state.tcpMode === 'server' ? `Listening on ${state.tcpPort}` : state.tcpHost) :
+            state.protocol === "SSH" ? state.sshHost : "Remote"
+      );
+    }
+
+    setTimeout(() => {
+      isApplyingRemoteSyncRef.current = false;
+    }, 150);
+  }, [tabId, onConnectionStatusChange]);
+
+  const broadcastHostState = useCallback((overrideState?: Record<string, any>) => {
+    if (isApplyingRemoteSyncRef.current) return;
     const stateObj = {
       connected,
       protocol: connectionType,
@@ -577,10 +707,23 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       sshUsername,
       sshAuthMode,
       sshAuthSecret,
-      isRecording
+      isRecording,
+      ...overrideState
     };
-    safeInvoke("broadcast_state_sync", { stateJson: JSON.stringify(stateObj) }).catch(() => {});
-  }, [connected, connectionType, activeProtocol, selectedPort, baudRate, dataBits, stopBits, parity, flowControl, tcpHost, tcpPort, tcpMode, sshHost, sshPort, sshUsername, sshAuthMode, sshAuthSecret, isRecording]);
+
+    if (isTauri()) {
+      safeInvoke("broadcast_state_sync", { stateJson: JSON.stringify(stateObj) }).catch(() => { });
+    } else if (remoteChannel && remoteChannel.readyState === 'open') {
+      const jsonBytes = new TextEncoder().encode(JSON.stringify(stateObj));
+      const payload = new Uint8Array(2 + jsonBytes.length);
+      payload[0] = 0x02; // Control
+      payload[1] = 0x10; // State Sync
+      payload.set(jsonBytes, 2);
+      if (typeof remoteChannel.send === 'function') {
+        remoteChannel.send(payload);
+      }
+    }
+  }, [connected, connectionType, activeProtocol, selectedPort, baudRate, dataBits, stopBits, parity, flowControl, tcpHost, tcpPort, tcpMode, sshHost, sshPort, sshUsername, sshAuthMode, sshAuthSecret, isRecording, remoteChannel]);
 
   useEffect(() => {
     broadcastHostStateRef.current = broadcastHostState;
@@ -600,12 +743,6 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   useEffect(() => {
     if (project.connection_type) {
       setConnectionType(project.connection_type);
-    } else if (project.serial_config) {
-      setConnectionType('Serial');
-    } else if (project.tcp_config) {
-      setConnectionType('TCP');
-    } else if (project.ssh_config) {
-      setConnectionType('SSH');
     }
 
     if (project.tcp_config) {
@@ -799,8 +936,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             tabId,
             state.connected,
             state.protocol === "Serial" ? (state.portName || "Serial") :
-            state.protocol === "TCP" ? (state.tcpMode === 'server' ? `Listening on ${state.tcpPort}` : state.tcpHost) :
-            state.protocol === "SSH" ? state.sshHost : "Remote"
+              state.protocol === "TCP" ? (state.tcpMode === 'server' ? `Listening on ${state.tcpPort}` : state.tcpHost) :
+                state.protocol === "SSH" ? state.sshHost : "Remote"
           );
         }
       } catch (e) {
@@ -821,15 +958,34 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         if (config.sshPort) setSshPort(config.sshPort);
         if (config.sshUsername) setSshUsername(config.sshUsername);
         setConnected(true);
+        setIsConnecting(false);
         setActiveProtocol(config.protocol || "Serial");
         onConnectionStatusChange(tabId, true, config.protocol === "Serial" ? config.portName : config.protocol === "TCP" ? (config.tcpMode === 'server' ? `Listening on ${config.tcpPort}` : config.tcpHost) : config.sshHost);
+        setTimeout(() => {
+          broadcastHostStateRef.current();
+        }, 100);
       }
+    });
+
+    const unlistenConnectFailed = safeListen<string>('remote-connect-failed', (event) => {
+      alert("Hardware connection failed on Host: " + event.payload);
+      setConnected(false);
+      setIsConnecting(false);
+      setActiveProtocol(null);
+      onConnectionStatusChange(tabId, false, "Disconnected");
+      setTimeout(() => {
+        broadcastHostStateRef.current();
+      }, 100);
     });
 
     const unlistenDisconnectApplied = safeListen<void>('remote-disconnect-applied', () => {
       setConnected(false);
+      setIsConnecting(false);
       setActiveProtocol(null);
       onConnectionStatusChange(tabId, false, "Disconnected");
+      setTimeout(() => {
+        broadcastHostStateRef.current();
+      }, 100);
     });
 
     const unlistenChannelOpen = safeListen<any>('remote-channel-open', () => {
@@ -844,9 +1000,28 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       const [, parsedProject] = event.payload;
       // Auto-fix legacy default names
       if (parsedProject.name === "Untitled Project" || parsedProject.name === "New Project") {
-          parsedProject.name = "Plan Terminal";
+        parsedProject.name = "Plan Terminal";
       }
       setProject(parsedProject);
+    });
+
+    const unlistenMediaSignal = safeListen<any>('remote-media-signal', () => {});
+
+    // Listen for remote project sync from Rust (Viewer -> Host)
+    const unlistenProjectSync = safeListen<any>('remote-project-sync', (event) => {
+      try {
+        const payloadStr = new TextDecoder().decode(new Uint8Array(event.payload[2].slice(1)));
+        const syncData = JSON.parse(payloadStr);
+        if (syncData.type === "PROJECT_SYNC" && syncData.project) {
+          isIncomingSyncRef.current = true;
+          setProject(syncData.project);
+          if (syncData.connectionType) setConnectionType(syncData.connectionType);
+          if (typeof syncData.connected === 'boolean') setConnected(syncData.connected);
+          addLog("Remote sequence/project update synchronized.");
+        }
+      } catch (e) {
+        console.error("Failed to parse remote project sync:", e);
+      }
     });
 
     return () => {
@@ -860,9 +1035,12 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       unlistenSync.then(f => f());
       unlistenStateSync.then(f => f());
       unlistenConnectApplied.then(f => f());
+      unlistenConnectFailed.then(f => f());
       unlistenDisconnectApplied.then(f => f());
       unlistenChannelOpen.then(f => f());
       unlistenParsedProject.then(f => f());
+      unlistenMediaSignal.then(f => f());
+      unlistenProjectSync.then(f => f());
     };
   }, []);
 
@@ -913,7 +1091,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       }
     };
     window.addEventListener('trigger-tab-share', handleTrigger);
-    
+
     // Listen for remote port requests
     const unlistenPortsReq = safeListen("remote-request-ports", () => {
       refreshPorts();
@@ -951,14 +1129,14 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       if (typeof remoteChannel.send === 'function') {
         remoteChannel.send(payload);
       }
-    } else if (isTauri() && isSharing && activePeers && Object.keys(activePeers).length > 0) {
+    } else if (isTauri() && activePeers && Object.keys(activePeers).length > 0) {
       // Host broadcasting state to all peers
       Object.keys(activePeers).forEach(pid => {
         safeInvoke('send_remote_data', { peerId: pid, label: 'serial-bridge', data: Array.from(payload) })
           .catch(e => console.error("Sync failed:", e));
       });
     }
-  }, [project, connectionType, connected, ports]);
+  }, [project, connectionType, connected, ports, activePeers]);
 
   const [activePeriodicIds, setActivePeriodicIds] = useState<Set<string>>(new Set());
 
@@ -991,7 +1169,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     return () => {
       if (connected) {
         safeInvoke("stop_all_periodic_sequences", { tabId, connType: connectionType || "Serial" })
-          .catch(() => {});
+          .catch(() => { });
       }
     };
   }, [tabId, connected, connectionType]);
@@ -1008,7 +1186,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         payload[0] = 0x02; // Control
         payload[1] = 0x05; // Trigger
         payload.set(seqIdBytes, 2);
-        
+
         if (typeof remoteChannel.send === 'function') {
           remoteChannel.send(payload);
         }
@@ -1053,12 +1231,17 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       setRxPackets(0);
       setTxPackets(0);
       const protocol = connectionType || "Serial";
-      
+      let portToConnect = selectedPort;
+      if (protocol === "Serial" && !portToConnect && ports.length > 0) {
+        portToConnect = (ports[0] as any).port_name || (ports[0] as any).name || "";
+        setSelectedPort(portToConnect);
+      }
+
       if (!isTauri() && remoteChannel) {
         // Send Connect request over WebRTC
         const config = {
           protocol,
-          portName: selectedPort,
+          portName: portToConnect,
           baudRate,
           dataBits,
           flowControl,
@@ -1066,6 +1249,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           stopBits,
           tcpHost,
           tcpPort,
+          tcpMode,
           sshHost,
           sshPort,
           sshUsername,
@@ -1077,7 +1261,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         payload[0] = 0x02; // Control
         payload[1] = 0x0B; // Request Connect
         payload.set(configBytes, 2);
-        
+
         if (typeof remoteChannel.send === 'function') {
           remoteChannel.send(payload);
         }
@@ -1119,7 +1303,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           await safeInvoke("connect_remote", { tabId, deviceId: remoteDeviceId });
         }
       }
-      
+
       setActiveProtocol(protocol);
       setConnected(true);
       onConnectionStatusChange(tabId, true, protocol === "Serial" ? selectedPort : protocol === "TCP" ? (tcpMode === 'server' ? `Listening on ${tcpPort}` : tcpHost) : protocol === "SSH" ? sshHost : "Remote");
@@ -1133,7 +1317,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const handleDisconnect = async () => {
     try {
       const protocolToDisconnect = activeProtocol || connectionType || "Serial";
-      
+
       if (!isTauri() && remoteChannel) {
         // Send Disconnect request over WebRTC
         const payload = new Uint8Array([0x02, 0x0C]); // Control -> Request Disconnect
@@ -1142,7 +1326,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         }
       } else {
         await safeInvoke("stop_all_periodic_sequences", { tabId, connType: protocolToDisconnect });
-        
+
         if (protocolToDisconnect === "Serial") {
           await safeInvoke("close_serial_port", { tabId });
         } else if (protocolToDisconnect === "TCP") {
@@ -1283,6 +1467,14 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 ▶️ Playback
               </button>
             )}
+
+            {/* Remote Tab Indicator */}
+            {(!isTauri() || remoteChannel) && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-blue-500/10 border border-blue-500/20 rounded-md shadow-sm">
+                <Globe className="w-3.5 h-3.5 text-blue-500 animate-pulse" />
+                <span className="text-[10px] font-bold text-blue-400 uppercase tracking-wider">Remote Session</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1306,7 +1498,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                   colorScheme: darkMode ? 'dark' : 'light'
                 }}
                 value={connectionType}
-                onChange={(e) => setConnectionType(e.target.value as 'Serial' | 'TCP' | 'SSH')}
+                onChange={(e) => {
+                  const newType = e.target.value as 'Serial' | 'TCP' | 'SSH';
+                  setConnectionType(newType);
+                  setProject(prev => ({ ...prev, connection_type: newType }));
+                }}
                 disabled={connected}
               >
                 <option value="Serial">Serial</option>
@@ -1529,7 +1725,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               />
             </>
           ) : connectionType === 'Remote' ? (
-             <div className="flex-1" /> // Spacer for remote mode
+            <div className="flex-1" /> // Spacer for remote mode
           ) : (
 
             <>
@@ -1666,7 +1862,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           </div>
 
           <div className="w-px h-5 bg-border mx-0.5" />
-          
+
           {connectionType !== 'Remote' && (
             <div className="flex items-center gap-2">
               {!connected ? (
@@ -1679,10 +1875,12 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 </button>
               ) : (
                 <button
-                  className="bg-red-600 hover:bg-red-700 text-white rounded px-2.5 py-0.5 text-xs font-semibold"
+                  className="bg-red-600 hover:bg-red-700 text-white rounded px-3 py-1 text-xs font-bold shadow-md flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer"
                   onClick={() => handleDisconnect()}
+                  title="Disconnect active connection or remote session"
                 >
-                  Disconnect
+                  <Unplug className="w-3.5 h-3.5" />
+                  Disconnect Session
                 </button>
               )}
             </div>
@@ -1714,7 +1912,60 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         </div>
       </header>
 
-      <main className="flex-1 p-2 overflow-hidden">
+      <main className="flex-1 p-2 overflow-hidden relative">
+        {/* Web Viewer Connect Overlay */}
+        {!isTauri() && !connected && !remoteChannel && tabId.startsWith('remote-') && (
+          <div className="absolute inset-0 z-50 bg-background/95 backdrop-blur-sm flex flex-col items-center justify-center p-4">
+            <div className="bg-card p-6 rounded-lg border shadow-xl flex flex-col items-center text-center gap-4 max-w-md w-full animate-in zoom-in-95 duration-200">
+              <Globe className="w-12 h-12 text-blue-500 animate-pulse" />
+              <div>
+                <h3 className="text-lg font-bold text-foreground">Remote Connection</h3>
+                <p className="text-sm text-zinc-400 mt-1">
+                  Ready to connect to Host Device ID: <span className="font-mono text-blue-400 font-bold">{new URLSearchParams(window.location.search).get('id') || 'Unknown'}</span>
+                </p>
+              </div>
+
+              {/* Security ID Verification Display */}
+              <div className="w-full bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 text-left">
+                <div className="text-[11px] font-bold text-blue-400 uppercase tracking-wider mb-1">Your Request ID (Security Verification):</div>
+                <div className="text-sm font-mono font-bold text-zinc-200 bg-black/50 px-2.5 py-1.5 rounded border border-blue-500/20 text-center select-all">
+                  {signaling?.myId || remoteDeviceId || 'Generating ID...'}
+                </div>
+                <div className="text-[10px] text-zinc-400 mt-1">
+                  Tell the host user this Request ID over phone/chat so they can verify and accept your request before connecting.
+                </div>
+              </div>
+
+              <button
+                onClick={() => {
+                  if (signaling) {
+                    const targetId = new URLSearchParams(window.location.search).get('id');
+                    if (targetId) {
+                      setIsConnecting(true);
+                      console.log("[Workspace] Connecting to targetId:", targetId, "via signaling instance:", signaling);
+                      signaling.connectTo(targetId).then(() => {
+                        console.log("[Workspace] connectTo returned successfully. Waiting for DataChannel to open.");
+                      }).catch(e => {
+                        console.error("[Workspace] connectTo error:", e);
+                        alert("Connection failed: " + (e.message || e));
+                        setIsConnecting(false);
+                      });
+                    } else {
+                      alert("Target ID not found in URL!");
+                    }
+                  } else {
+                    alert("Signaling not ready yet. Please wait a moment.");
+                  }
+                }}
+                disabled={isConnecting}
+                className={`w-full font-bold py-2.5 px-4 rounded shadow-md transition-all active:scale-95 cursor-pointer ${isConnecting ? 'bg-zinc-700 text-zinc-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}
+              >
+                {isConnecting ? 'Requesting Connection...' : 'Connect to Host'}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="flex h-full gap-0">
           {/* Resizable Sidebar */}
           {isSidebarOpen && (
@@ -1722,54 +1973,54 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               className="border rounded-lg p-2 bg-card overflow-hidden shrink-0"
               style={{ width: sidebarWidth, minWidth: 200, maxWidth: 600 }}
             >
-            <ProjectSidebar
-              project={{
-                ...project,
-                connection_type: connectionType,
-                serial_config: { port_name: selectedPort, baud_rate: baudRate, data_bits: dataBits, flow_control: flowControl, parity: parity, stop_bits: stopBits },
-                tcp_config: { host: tcpHost, port: tcpPort, mode: tcpMode },
-                ssh_config: { host: sshHost, port: sshPort, username: sshUsername },
-              }}
-              onUpdate={(updatedProject: Project) => {
-                setProject(updatedProject);
-                // When loading a project, also update the local state fields immediately
-                if (updatedProject.connection_type) setConnectionType(updatedProject.connection_type);
-                if (updatedProject.serial_config) {
-                  setSelectedPort(updatedProject.serial_config.port_name);
-                  setBaudRate(updatedProject.serial_config.baud_rate);
-                  setDataBits(updatedProject.serial_config.data_bits);
-                  setFlowControl(updatedProject.serial_config.flow_control);
-                  setParity(updatedProject.serial_config.parity);
-                  setStopBits(updatedProject.serial_config.stop_bits);
-                }
-                if (updatedProject.tcp_config) {
-                  setTcpHost(updatedProject.tcp_config.host);
-                  setTcpPort(updatedProject.tcp_config.port);
-                }
-                if (updatedProject.ssh_config) {
-                  setSshHost(updatedProject.ssh_config.host);
-                  setSshPort(updatedProject.ssh_config.port);
-                  setSshUsername(updatedProject.ssh_config.username);
-                }
-              }}
-              onSend={handleSend}
-              onEditSequence={setEditingSeq}
-              onEditReaction={setEditingReaction}
-              connected={connected}
-              activePeriodicIds={activePeriodicIds}
-              onStartPeriodic={startPeriodic}
-              onStopPeriodic={stopPeriodic}
-              onRemoteParseRequest={(ext, content) => {
-                if (remoteChannel && typeof remoteChannel.send === 'function') {
-                  const reqBytes = new TextEncoder().encode(JSON.stringify({ ext, content }));
-                  const payload = new Uint8Array(2 + reqBytes.length);
-                  payload[0] = 0x02; // Control
-                  payload[1] = 0x0F; // Parse Project Request
-                  payload.set(reqBytes, 2);
-                  remoteChannel.send(payload);
-                }
-              }}
-            />
+              <ProjectSidebar
+                project={{
+                  ...project,
+                  connection_type: connectionType,
+                  serial_config: { port_name: selectedPort, baud_rate: baudRate, data_bits: dataBits, flow_control: flowControl, parity: parity, stop_bits: stopBits },
+                  tcp_config: { host: tcpHost, port: tcpPort, mode: tcpMode },
+                  ssh_config: { host: sshHost, port: sshPort, username: sshUsername },
+                }}
+                onUpdate={(updatedProject: Project) => {
+                  setProject(updatedProject);
+                  // When loading a project, also update the local state fields immediately
+                  if (updatedProject.connection_type) setConnectionType(updatedProject.connection_type);
+                  if (updatedProject.serial_config) {
+                    setSelectedPort(updatedProject.serial_config.port_name);
+                    setBaudRate(updatedProject.serial_config.baud_rate);
+                    setDataBits(updatedProject.serial_config.data_bits);
+                    setFlowControl(updatedProject.serial_config.flow_control);
+                    setParity(updatedProject.serial_config.parity);
+                    setStopBits(updatedProject.serial_config.stop_bits);
+                  }
+                  if (updatedProject.tcp_config) {
+                    setTcpHost(updatedProject.tcp_config.host);
+                    setTcpPort(updatedProject.tcp_config.port);
+                  }
+                  if (updatedProject.ssh_config) {
+                    setSshHost(updatedProject.ssh_config.host);
+                    setSshPort(updatedProject.ssh_config.port);
+                    setSshUsername(updatedProject.ssh_config.username);
+                  }
+                }}
+                onSend={handleSend}
+                onEditSequence={setEditingSeq}
+                onEditReaction={setEditingReaction}
+                connected={connected}
+                activePeriodicIds={activePeriodicIds}
+                onStartPeriodic={startPeriodic}
+                onStopPeriodic={stopPeriodic}
+                onRemoteParseRequest={(ext, content) => {
+                  if (remoteChannel && typeof remoteChannel.send === 'function') {
+                    const reqBytes = new TextEncoder().encode(JSON.stringify({ ext, content }));
+                    const payload = new Uint8Array(2 + reqBytes.length);
+                    payload[0] = 0x02; // Control
+                    payload[1] = 0x0F; // Parse Project Request
+                    payload.set(reqBytes, 2);
+                    remoteChannel.send(payload);
+                  }
+                }}
+              />
             </div>
           )}
 
@@ -1837,6 +2088,43 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 </button>
               </div>
             )}
+            {/* Screen Share Video Overlay */}
+            {isSharingScreen && (
+              <div className="absolute top-10 right-4 z-40 bg-black/90 rounded-lg overflow-hidden border border-zinc-700 shadow-2xl group flex flex-col" style={{ width: '450px', maxWidth: '90%' }}>
+                <div className="bg-zinc-800/90 backdrop-blur px-3 py-1.5 text-xs text-zinc-200 font-bold flex justify-between items-center border-b border-zinc-700">
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    <span>{isTauri() ? "Screen Share Preview" : "Live Host Screen Share"}</span>
+                  </div>
+                  <button
+                    onClick={() => setIsSharingScreen(false)}
+                    className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold uppercase tracking-wider transition-colors flex items-center gap-1 cursor-pointer shadow-sm"
+                    title="Disconnect Screen Sharing"
+                  >
+                    <VideoOff className="w-3.5 h-3.5" />
+                    Disconnect Screen
+                  </button>
+                </div>
+                <video
+                  ref={(el) => {
+                    if (isTauri()) {
+                      (localVideoRef as any).current = el;
+                    } else {
+                      (remoteVideoRef as any).current = el;
+                    }
+                    if (el && mediaStreamRef.current) {
+                      el.srcObject = mediaStreamRef.current;
+                      el.play().catch(() => {});
+                    }
+                  }}
+                  autoPlay
+                  playsInline
+                  muted={isTauri()}
+                  className="w-full h-auto object-contain bg-black"
+                />
+              </div>
+            )}
+
             <Terminal
               logs={logs}
               onClear={() => setLogs([])}
@@ -1851,11 +2139,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                     // SSH may not want \r\n added manually if the xterm/terminal handles it, but let's add it for consistency if needed.
                     const suffix = isSsh ? '\n' : '\r\n';
                     const bytes = new TextEncoder().encode(cmd + suffix);
-                    
+
                     let typeByte = 0x01; // Serial
                     if (isSsh) typeByte = 0x03;
                     if (isTcp) typeByte = 0x04;
-                    
+
                     const packet = new Uint8Array([typeByte, 1, ...bytes]); // 1 = TX direction
                     remoteChannel.send(packet);
                     addLog(`Sent remote command: ${cmd.trim()}`);
@@ -1955,13 +2243,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
         <div className="flex items-center gap-3 font-mono text-[10px] text-zinc-400">
           <div className="flex items-center gap-1">
             <span className="text-zinc-500 font-sans">TX:</span>
-            <span className="text-zinc-300 font-bold">{txBytes > 1024 ? `${(txBytes/1024).toFixed(2)} KB` : `${txBytes} B`}</span>
+            <span className="text-zinc-300 font-bold">{txBytes > 1024 ? `${(txBytes / 1024).toFixed(2)} KB` : `${txBytes} B`}</span>
             <span className="text-zinc-600 font-sans">({txPackets})</span>
           </div>
           <span className="text-zinc-700">|</span>
           <div className="flex items-center gap-1">
             <span className="text-zinc-500 font-sans">RX:</span>
-            <span className="text-zinc-300 font-bold">{rxBytes > 1024 ? `${(rxBytes/1024).toFixed(2)} KB` : `${rxBytes} B`}</span>
+            <span className="text-zinc-300 font-bold">{rxBytes > 1024 ? `${(rxBytes / 1024).toFixed(2)} KB` : `${rxBytes} B`}</span>
             <span className="text-zinc-600 font-sans">({rxPackets})</span>
           </div>
         </div>

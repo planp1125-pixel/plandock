@@ -9,6 +9,19 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.13] - 2026-07-24
+
+### Security & Verification
+- **Web Viewer Request ID Display**: Web Viewer displays its own Client Request ID (e.g. `100-348-829`) on the connection modal and status bar for identity verification over phone/chat before the host accepts the connection.
+
+### Added & Fixed
+- **Seamless Bi-Directional State Mirroring**: Full real-time synchronization between Host desktop app and Web Viewers for protocol toggling (`Serial ↔ TCP ↔ SSH`), Baud Rates, Parity, Data/Stop Bits, Flow Control, TCP Host/Port/Mode, and SSH parameters.
+- **Bi-Directional Sequence & Reaction Editing**: Creating, editing, or deleting sequences and reactions on either side synchronizes live.
+- **Bi-Directional Hardware Connect/Disconnect**: Requesting hardware connection/disconnection from the remote viewer opens/closes physical ports on the Host desktop with status validation and error feedback.
+- **Reconnection & Multi-Peer State Fix**: Fixed an issue where reconnecting Web Viewers would lock at "Waiting for remote connections..." by emitting `remote-peer-connected` on DataChannel handshake.
+
+---
+
 ## [0.5.11] - 2026-07-22
 
 ### Release

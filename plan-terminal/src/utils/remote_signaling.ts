@@ -12,7 +12,7 @@ export interface SignalMessage {
 }
 
 export class RemoteSignaling {
-    private myId: string;
+    public myId: string;
     private ws: WebSocket | null = null;
     private peerConnection: RTCPeerConnection | null = null;
     private onDataChannelCallback: (channel: RTCDataChannel, peerId: string) => void;
@@ -142,6 +142,8 @@ export class RemoteSignaling {
         if (this.ws) this.ws.close();
     }
 
+    private pendingCandidates: RTCIceCandidateInit[] = [];
+
     // 4. HANDLE INCOMING MESSAGES
     private async handleIncomingSignal(msg: SignalMessage) {
         const fromId = msg.from_id || "unknown";
@@ -156,18 +158,35 @@ export class RemoteSignaling {
                     const answer = await pc.createAnswer();
                     await pc.setLocalDescription(answer);
                     this.sendSignal(fromId, 'answer', answer.sdp!);
+                    
+                    // Process queued candidates
+                    for (const candidate of this.pendingCandidates) {
+                        await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error(e));
+                    }
+                    this.pendingCandidates = [];
                 });
             }
         }
         else if (msg.type === 'answer') {
             await this.peerConnection?.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp! }));
+            // Process queued candidates
+            for (const candidate of this.pendingCandidates) {
+                await this.peerConnection?.addIceCandidate(new RTCIceCandidate(candidate)).catch(e => console.error(e));
+            }
+            this.pendingCandidates = [];
         }
         else if (msg.type === 'ice_candidate') {
             const pc = this.initPeerConnection();
-            try {
-                await pc.addIceCandidate(new RTCIceCandidate(JSON.parse(msg.candidate!)));
-            } catch (e) {
-                console.error("[WebRTC] Error adding received ice candidate", e);
+            const candidate = JSON.parse(msg.candidate!);
+            if (pc.remoteDescription) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                } catch (e) {
+                    console.error("[WebRTC] Error adding received ice candidate", e);
+                }
+            } else {
+                console.log("[WebRTC] Queuing ICE candidate (remote description not set)");
+                this.pendingCandidates.push(candidate);
             }
         }
     }
@@ -208,6 +227,10 @@ export class RemoteSignaling {
                 .catch(e => console.error("Failed to connect via Rust:", e));
             return null;
         } else {
+            if (this.peerConnection) {
+                this.peerConnection.close();
+                this.peerConnection = null as any;
+            }
             const pc = this.initPeerConnection();
             const channel = pc.createDataChannel("serial-bridge");
             this.setupDataChannel(channel, targetId);
