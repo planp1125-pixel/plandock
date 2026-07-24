@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.19] - 2026-07-24
+
+### Fixed
+- **Ubuntu Ports Repository for ARM64**: Configured `ports.ubuntu.com` for `[arch=arm64]` APT sources in `.github/workflows/build.yml` to resolve 404 package fetching errors during multiarch sysroot installation.
+
+---
+
 ## [0.5.18] - 2026-07-24
 
 ### Fixed
