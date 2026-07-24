@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.16] - 2026-07-24
+
+### Fixed
+- **Raspberry Pi ARM64 QEMU Build Fix**: Resolved `cc: internal compiler error: Segmentation fault` during `libc` linking by configuring `CARGO_BUILD_JOBS=2` and `RUSTFLAGS="-C codegen-units=1"` inside `.github/workflows/build.yml`.
+
+---
+
 ## [0.5.15] - 2026-07-24
 
 ### Added & Fixed

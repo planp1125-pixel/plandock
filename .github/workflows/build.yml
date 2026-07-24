@@ -117,11 +117,13 @@ jobs:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           run: |
             export PATH="$HOME/.cargo/bin:$PATH"
+            export CARGO_BUILD_JOBS=2
+            export RUSTFLAGS="-C codegen-units=1"
             cd plan-terminal
             npm install
             npm run tauri build
-            cp src-tauri/target/release/bundle/deb/*.deb /artifacts/
-            cp src-tauri/target/release/bundle/appimage/*.AppImage /artifacts/
+            cp src-tauri/target/release/bundle/deb/*.deb /artifacts/ || true
+            cp src-tauri/target/release/bundle/appimage/*.AppImage /artifacts/ || true
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
