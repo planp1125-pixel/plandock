@@ -1516,7 +1516,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                     colorScheme: darkMode ? 'dark' : 'light'
                   }}
                   value={selectedPort}
-                  onChange={e => setSelectedPort(e.target.value)}
+                  onChange={e => {
+                    setSelectedPort(e.target.value);
+                    broadcastHostState({ portName: e.target.value });
+                  }}
                   disabled={connected}
                 >
                   {ports.length === 0 && <option value="">No ports</option>}
@@ -1538,7 +1541,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                     colorScheme: darkMode ? 'dark' : 'light'
                   }}
                   value={baudRate}
-                  onChange={e => setBaudRate(Number(e.target.value))}
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setBaudRate(val);
+                    broadcastHostState({ baudRate: val });
+                  }}
                   disabled={connected}
                 >
                   {[300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600].map(b => (
@@ -1588,7 +1595,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                               color: 'hsl(var(--foreground))',
                               colorScheme: darkMode ? 'dark' : 'light'
                             }}
-                            value={dataBits} onChange={e => setDataBits(Number(e.target.value))} disabled={connected}>
+                            value={dataBits}
+                            onChange={e => {
+                              const val = Number(e.target.value);
+                              setDataBits(val);
+                              broadcastHostState({ dataBits: val });
+                            }}
+                            disabled={connected}>
                             {[5, 6, 7, 8].map(n => <option key={n} value={n}>{n}</option>)}
                           </select>
                           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
@@ -1605,7 +1618,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                               color: 'hsl(var(--foreground))',
                               colorScheme: darkMode ? 'dark' : 'light'
                             }}
-                            value={stopBits} onChange={e => setStopBits(Number(e.target.value))} disabled={connected}>
+                            value={stopBits}
+                            onChange={e => {
+                              const val = Number(e.target.value);
+                              setStopBits(val);
+                              broadcastHostState({ stopBits: val });
+                            }}
+                            disabled={connected}>
                             {[1, 2].map(n => <option key={n} value={n}>{n}</option>)}
                           </select>
                           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
@@ -1622,7 +1641,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                               color: 'hsl(var(--foreground))',
                               colorScheme: darkMode ? 'dark' : 'light'
                             }}
-                            value={parity} onChange={e => setParity(e.target.value)} disabled={connected}>
+                            value={parity}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setParity(val);
+                              broadcastHostState({ parity: val });
+                            }}
+                            disabled={connected}>
                             {["None", "Odd", "Even"].map(n => <option key={n} value={n}>{n}</option>)}
                           </select>
                           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
@@ -1639,7 +1664,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                               color: 'hsl(var(--foreground))',
                               colorScheme: darkMode ? 'dark' : 'light'
                             }}
-                            value={flowControl} onChange={e => setFlowControl(e.target.value)} disabled={connected}>
+                            value={flowControl}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setFlowControl(val);
+                              broadcastHostState({ flowControl: val });
+                            }}
+                            disabled={connected}>
                             {["None", "Software", "Hardware"].map(n => <option key={n} value={n}>{n}</option>)}
                           </select>
                           <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
@@ -1666,7 +1697,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                   color: 'hsl(var(--foreground))',
                 }}
                 value={tcpMode}
-                onChange={(e) => setTcpMode(e.target.value as 'client' | 'server')}
+                onChange={(e) => {
+                  const mode = e.target.value as 'client' | 'server';
+                  setTcpMode(mode);
+                  broadcastHostState({ tcpMode: mode });
+                }}
                 disabled={connected}
               >
                 <option value="client">Client</option>
@@ -1682,7 +1717,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 }}
                 placeholder="192.168.1.100"
                 value={tcpHost}
-                onChange={(e) => setTcpHost(e.target.value)}
+                onChange={(e) => {
+                  setTcpHost(e.target.value);
+                  broadcastHostState({ tcpHost: e.target.value });
+                }}
                 disabled={connected}
               />
               <span className="text-zinc-500 font-bold">:</span>
@@ -1696,7 +1734,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 }}
                 placeholder="8080"
                 value={tcpPort}
-                onChange={(e) => setTcpPort(Number(e.target.value))}
+                onChange={(e) => {
+                  const port = Number(e.target.value);
+                  setTcpPort(port);
+                  broadcastHostState({ tcpPort: port });
+                }}
                 disabled={connected}
               />
             </>
@@ -1716,7 +1758,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 placeholder="pi@192.168.1.100"
                 title="SSH Username"
                 value={sshUsername}
-                onChange={(e) => setSshUsername(e.target.value)}
+                onChange={(e) => {
+                  setSshUsername(e.target.value);
+                  broadcastHostState({ sshUsername: e.target.value });
+                }}
                 disabled={connected}
               />
               <span className="text-zinc-500 font-bold">@</span>
@@ -1731,7 +1776,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 placeholder="Host"
                 title="SSH Host URL or IP"
                 value={sshHost}
-                onChange={(e) => setSshHost(e.target.value)}
+                onChange={(e) => {
+                  setSshHost(e.target.value);
+                  broadcastHostState({ sshHost: e.target.value });
+                }}
                 disabled={connected}
               />
               <span className="text-zinc-500 font-bold">:</span>
@@ -1746,7 +1794,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 placeholder="22"
                 title="SSH Port"
                 value={sshPort}
-                onChange={(e) => setSshPort(Number(e.target.value))}
+                onChange={(e) => {
+                  const port = Number(e.target.value);
+                  setSshPort(port);
+                  broadcastHostState({ sshPort: port });
+                }}
                 disabled={connected}
               />
               <span className="text-zinc-500 font-bold ml-1">Auth:</span>
