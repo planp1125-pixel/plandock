@@ -116,10 +116,11 @@ jobs:
             apt-get install -y nodejs
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           run: |
+            ulimit -s 65536 || true
             export PATH="$HOME/.cargo/bin:$PATH"
             export NODE_OPTIONS="--max-old-space-size=4096"
             export CARGO_BUILD_JOBS=1
-            export RUSTFLAGS="-C codegen-units=1"
+            export RUSTFLAGS="-C codegen-units=1 -C link-arg=-Wl,--no-keep-memory"
             cd plan-terminal
             npm install
             npm run tauri build
