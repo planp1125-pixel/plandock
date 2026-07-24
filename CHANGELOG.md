@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.17] - 2026-07-24
+
+### Fixed & Performance
+- **Raspberry Pi Fast Native Cross-Compilation**: Switched Raspberry Pi ARM64 builds from slow QEMU emulation (`run-on-arch-action`) to native `cross-rs` compilation (`useCross: true`). Reduces build times from 30+ minutes down to 2–3 minutes and eliminates QEMU memory segfaults.
+
+---
+
 ## [0.5.16] - 2026-07-24
 
 ### Fixed
