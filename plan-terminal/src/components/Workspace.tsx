@@ -594,6 +594,38 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           } catch (e) {
             console.error("Failed to parse project sync:", e);
           }
+        } else if (bytes[1] === 0x0B) {
+          // Connect Success from Host
+          try {
+            const configStr = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
+            const config = JSON.parse(configStr);
+            setConnected(true);
+            setIsConnecting(false);
+            setActiveProtocol(config.protocol || "Serial");
+            onConnectionStatusChange(
+              tabId,
+              true,
+              config.protocol === "Serial" ? (config.portName || "Serial") :
+                config.protocol === "TCP" ? (config.tcpMode === 'server' ? `Listening on ${config.tcpPort}` : config.tcpHost) :
+                  config.sshHost || "Connected"
+            );
+            addLog(`Hardware connected via ${config.protocol || 'Serial'}.`);
+          } catch (e) {
+            console.error("Failed to parse connect success:", e);
+          }
+        } else if (bytes[1] === 0x0D) {
+          // Connect Error from Host
+          try {
+            const errStr = new TextDecoder().decode(new Uint8Array(bytes.slice(2)));
+            alert("Hardware Connection Failed on Host:\n" + errStr);
+            setConnected(false);
+            setIsConnecting(false);
+            setActiveProtocol(null);
+            onConnectionStatusChange(tabId, false, "Disconnected");
+            addLog(`Hardware connection failed: ${errStr}`);
+          } catch (e) {
+            console.error("Failed to parse connect error:", e);
+          }
         } else if (bytes[1] === 0x10) {
           // State Sync (Host -> Viewer)
           try {
@@ -1233,6 +1265,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
       }
 
       if (!isTauri() && remoteChannel) {
+        if (protocol === "Serial" && !portToConnect) {
+          alert("Connection Failed: No serial port selected or available on host.");
+          setIsConnecting(false);
+          return;
+        }
         // Send Connect request over WebRTC
         const config = {
           protocol,
@@ -1497,6 +1534,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                   const newType = e.target.value as 'Serial' | 'TCP' | 'SSH';
                   setConnectionType(newType);
                   setProject(prev => ({ ...prev, connection_type: newType }));
+                  broadcastHostState({ protocol: newType });
                 }}
                 disabled={connected}
               >
@@ -1829,7 +1867,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                   color: 'hsl(var(--foreground))',
                 }}
                 value={sshAuthMode}
-                onChange={(e) => setSshAuthMode(e.target.value as 'password' | 'private_key')}
+                onChange={(e) => {
+                  const mode = e.target.value as 'password' | 'private_key';
+                  setSshAuthMode(mode);
+                  broadcastHostState({ sshAuthMode: mode });
+                }}
                 disabled={connected}
               >
                 <option value="password">Password</option>

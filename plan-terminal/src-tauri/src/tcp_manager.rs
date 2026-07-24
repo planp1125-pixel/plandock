@@ -105,13 +105,27 @@ impl TcpManager {
         host: &str,
         port: u16,
     ) -> Result<(), String> {
-        self.disconnect(tab_id);
+        self.disconnect_all();
         std::thread::sleep(Duration::from_millis(100));
 
         let addr = format!("{}:{}", host, port);
         eprintln!("[TCP] [{}] Listening on {}", tab_id, addr);
 
-        let listener = std::net::TcpListener::bind(&addr).map_err(|e| format!("Bind failed: {}", e))?;
+        let socket = socket2::Socket::new(
+            socket2::Domain::IPV4,
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        ).map_err(|e| format!("Socket creation failed: {}", e))?;
+
+        let _ = socket.set_reuse_address(true);
+        #[cfg(not(windows))]
+        let _ = socket.set_reuse_port(true);
+
+        let sockaddr: std::net::SocketAddr = addr.parse().map_err(|e| format!("Invalid address: {}", e))?;
+        socket.bind(&sockaddr.into()).map_err(|e| format!("Bind failed: {}", e))?;
+        socket.listen(128).map_err(|e| format!("Listen failed: {}", e))?;
+
+        let listener: std::net::TcpListener = socket.into();
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
 
         let tab = self.get_or_create_tab(tab_id);
@@ -181,6 +195,32 @@ impl TcpManager {
         // Clear buffer on reaction update
         let mut b_lock = tab.rolling_buffer.lock().unwrap();
         b_lock.clear();
+    }
+
+    pub fn disconnect_all(&self) {
+        let tabs = self.tabs.lock().unwrap();
+        for (tab_id, tab) in tabs.iter() {
+            {
+                let mut r = tab.is_reading.lock().unwrap();
+                *r = false;
+            }
+            {
+                let mut l = tab.is_listening.lock().unwrap();
+                *l = false;
+            }
+            {
+                let mut s = tab.stream.lock().unwrap();
+                if let Some(stream_arc) = s.as_ref() {
+                    let _ = stream_arc.shutdown(std::net::Shutdown::Both);
+                }
+                *s = None;
+            }
+            {
+                let mut senders = tab.periodic_senders.lock().unwrap();
+                senders.clear();
+            }
+            eprintln!("[TCP] [{}] Disconnected", tab_id);
+        }
     }
 
     pub fn disconnect(&self, tab_id: &str) {

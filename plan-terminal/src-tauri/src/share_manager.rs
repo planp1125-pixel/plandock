@@ -557,7 +557,13 @@ async fn handle_offer(my_id: String, from: String, sdp: String) {
         })
     }));
 
-    let from_dc = from_c.clone();
+    let pc_c = Arc::clone(&pc);
+    SHARE_MANAGER.peers.insert(from.clone(), PeerState {
+        pc: pc_c,
+        channels: Vec::new()
+    });
+
+    let from_dc = from.clone();
     pc.on_data_channel(Box::new(move |d| {
         let from_cc = from_dc.clone();
         Box::pin(async move {
@@ -571,12 +577,6 @@ async fn handle_offer(my_id: String, from: String, sdp: String) {
 
     let ans_msg = SignalMessage::Answer { to_id: from.clone(), from_id: my_id, sdp: answer.sdp };
     send_signal(ans_msg).await;
-
-    let pc_c = Arc::clone(&pc);
-    SHARE_MANAGER.peers.insert(from.clone(), PeerState {
-        pc: pc_c,
-        channels: Vec::new()
-    });
 
     // Drain any ICE candidates that arrived before the peer connection was created.
     if let Some((_, queued)) = PENDING_CANDIDATES.remove(&from) {
@@ -818,24 +818,26 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
         0x04 => { // Project State Sync (Viewer -> Host)
             if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
                 use tauri::Emitter;
-                let payload_vec = payload.to_vec();
+                let payload_vec = if payload.len() > 1 { payload[1..].to_vec() } else { Vec::new() };
                 let _ = ctx.app.emit("remote-project-sync", (peer_id, d.label().to_owned(), payload_vec));
             }
         }
         0x05 => { // Trigger Sequence (Viewer -> Host)
             if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
                 use tauri::Emitter;
-                let payload_vec = payload.to_vec();
+                let payload_vec = if payload.len() > 1 { payload[1..].to_vec() } else { Vec::new() };
                 let _ = ctx.app.emit("remote-sequence-trigger", (peer_id, d.label().to_owned(), payload_vec));
             }
         }
         0x0B => { // Request Connect (Viewer -> Host)
-            if let Ok(config_str) = String::from_utf8(payload.to_vec()) {
+            let json_bytes = if payload.len() > 1 { &payload[1..] } else { &[] };
+            if let Ok(config_str) = String::from_utf8(json_bytes.to_vec()) {
                 if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_str) {
                     if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
                         let protocol = config["protocol"].as_str().unwrap_or("Serial");
                         let tab_id = "main".to_string(); // Host always uses 'main'
                         
+                        println!("[REMOTE] Processing 0x0B Request Connect for protocol: {}", protocol);
                         let res = if protocol == "Serial" {
                             let port_name = config["portName"].as_str().unwrap_or("");
                             if port_name.is_empty() {
@@ -875,14 +877,27 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                         use tauri::Emitter;
                         match res {
                             Ok(_) => {
-                                let _ = ctx.app.emit("remote-connect-applied", config);
+                                println!("[REMOTE] Physical connection succeeded on host for {}", protocol);
+                                let _ = ctx.app.emit("remote-connect-applied", config.clone());
+                                // Send Connect Success back to requesting DataChannel peer
+                                if let Ok(config_bytes) = serde_json::to_vec(&config) {
+                                    let mut pkt = vec![0x02, 0x0B];
+                                    pkt.extend_from_slice(&config_bytes);
+                                    let _ = d.send(&pkt.into()).await;
+                                }
                             }
                             Err(err_msg) => {
-                                println!("[REMOTE] Connect failed on host: {}", err_msg);
-                                let _ = ctx.app.emit("remote-connect-failed", err_msg);
+                                println!("[REMOTE] Physical connection failed on host: {}", err_msg);
+                                let _ = ctx.app.emit("remote-connect-failed", err_msg.clone());
+                                // Send Connect Error back to requesting DataChannel peer
+                                let mut pkt = vec![0x02, 0x0D];
+                                pkt.extend_from_slice(err_msg.as_bytes());
+                                let _ = d.send(&pkt.into()).await;
                             }
                         }
                     }
+                } else {
+                    println!("[REMOTE] Failed to parse 0x0B JSON config: {}", config_str);
                 }
             }
         }
