@@ -124,6 +124,7 @@ jobs:
             export NODE_OPTIONS="--max-old-space-size=4096"
             export CARGO_BUILD_JOBS=1
             export RUSTFLAGS="-C link-arg=-fuse-ld=lld -C codegen-units=1"
+            export RUSTFLAGS_FOR_BUILD="-C link-arg=-fuse-ld=lld -C codegen-units=1"
             cd plan-terminal
             npm install
             npm run tauri build
