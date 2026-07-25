@@ -111,7 +111,7 @@ jobs:
             --volume "${PWD}/artifacts:/artifacts"
           install: |
             apt-get update -y
-            apt-get install -y curl wget build-essential lld clang libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev libudev-dev
+            apt-get install -y curl wget build-essential lld clang libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev libudev-dev xdg-utils file desktop-file-utils
             curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
             apt-get install -y nodejs
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
