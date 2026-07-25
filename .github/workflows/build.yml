@@ -207,6 +207,8 @@ jobs:
           cp src-tauri/target/armv7-unknown-linux-gnueabihf/release/bundle/deb/*.deb artifacts/
       - name: upload armhf release asset
         uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: app-${{ github.ref_name }}
           files: plan-terminal/artifacts/*.deb
