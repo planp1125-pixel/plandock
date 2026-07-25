@@ -170,6 +170,9 @@ jobs:
 
   build-linux-armhf:
     runs-on: ubuntu-24.04-arm
+    needs: [build-linux]
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: setup node
@@ -206,8 +209,7 @@ jobs:
           mkdir -p artifacts
           cp src-tauri/target/armv7-unknown-linux-gnueabihf/release/bundle/deb/*.deb artifacts/
       - name: upload armhf release asset
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: app-${{ github.ref_name }}
-          files: plan-terminal/artifacts/*.deb
-          token: ${{ secrets.GITHUB_TOKEN }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "app-${{ github.ref_name }}" plan-terminal/artifacts/*.deb --clobber
