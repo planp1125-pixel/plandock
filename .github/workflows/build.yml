@@ -169,7 +169,7 @@ jobs:
           projectPath: plan-terminal
 
   build-linux-armhf:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-22.04
     needs: [build-linux]
     permissions:
       contents: write
@@ -186,14 +186,6 @@ jobs:
       - name: install armhf dependencies
         run: |
           sudo dpkg --add-architecture armhf
-          sudo bash -c 'cat << EOF > /etc/apt/sources.list.d/armhf.sources
-          Types: deb
-          URIs: http://ports.ubuntu.com/ubuntu-ports/
-          Suites: noble noble-updates noble-security
-          Components: main restricted universe multiverse
-          Architectures: armhf
-          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
-          EOF'
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libwebkit2gtk-4.1-dev:armhf libappindicator3-dev:armhf librsvg2-dev:armhf libssl-dev:armhf libudev-dev:armhf xdg-utils file desktop-file-utils
       - name: install frontend dependencies
