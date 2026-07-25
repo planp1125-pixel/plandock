@@ -96,44 +96,30 @@ jobs:
           # If not configured, it will build unsign/ad-hoc.
 
   build-linux-arm64:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
-      - name: Build on ARM64 (Raspberry Pi)
-        uses: uraimo/run-on-arch-action@v2
+      - name: setup node
+        uses: actions/setup-node@v4
         with:
-          arch: aarch64
-          distro: ubuntu22.04
-          githubToken: ${{ github.token }}
-          setup: |
-            mkdir -p "${PWD}/artifacts"
-          dockerRunArgs: |
-            --volume "${PWD}/artifacts:/artifacts"
-          install: |
-            apt-get update -y
-            apt-get install -y curl wget build-essential lld clang libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev libudev-dev xdg-utils file desktop-file-utils
-            curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-            apt-get install -y nodejs
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          run: |
-            ulimit -s 65536 || true
-            export PATH="$HOME/.cargo/bin:$PATH"
-            export CC=clang
-            export CXX=clang++
-            export CFLAGS="-O2"
-            export NODE_OPTIONS="--max-old-space-size=4096"
-            export CARGO_BUILD_JOBS=1
-            export RUSTFLAGS="-C link-arg=-fuse-ld=lld -C codegen-units=1"
-            export RUSTFLAGS_FOR_BUILD="-C link-arg=-fuse-ld=lld -C codegen-units=1"
-            cd plan-terminal
-            npm install
-            npm run tauri build
-            cp src-tauri/target/release/bundle/deb/*.deb /artifacts/ || true
-            cp src-tauri/target/release/bundle/appimage/*.AppImage /artifacts/ || true
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
+          node-version: 22
+      - name: install rust stable
+        uses: dtolnay/rust-toolchain@stable
+      - name: install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libssl-dev libudev-dev xdg-utils file desktop-file-utils
+      - name: install frontend dependencies
+        working-directory: plan-terminal
+        run: npm install
+      - name: build tauri app for Raspberry Pi (ARM64)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: app-${{ github.ref_name }}
-          files: |
-            artifacts/*.deb
-            artifacts/*.AppImage
+          tagName: app-${{ github.ref_name }}
+          releaseName: "Plan Terminal ${{ github.ref_name }}"
+          releaseBody: "See the assets to download this version and install."
+          releaseDraft: false
+          prerelease: false
+          projectPath: plan-terminal
