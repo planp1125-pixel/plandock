@@ -36,7 +36,18 @@ jobs:
         with:
           tagName: app-${{ github.ref_name }} # title for release
           releaseName: "Plan Terminal ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
+          releaseBody: |
+            ### 📦 Download & Installation Compatibility Guide:
+
+            | Platform / Operating System | File Name to Download | Target Hardware |
+            | :--- | :--- | :--- |
+            | 🍓 **Raspberry Pi OS (32-bit `armhf`)** | `Plan.Terminal_*_armhf.deb` | **Raspberry Pi 3, 4, 5 (32-bit OS)** |
+            | 🍓 **Raspberry Pi OS (64-bit `arm64`)** | `Plan.Terminal_*_arm64.deb` | **Raspberry Pi 3, 4, 5 (64-bit OS)** |
+            | 🍓 **Raspberry Pi Portable (64-bit ARM)** | `Plan.Terminal_aarch64.app.tar.gz` | **Raspberry Pi (Portable tarball)** |
+            | 🪟 **Windows PC (64-bit)** | `Plan.Terminal_*_x64-setup.exe` | **Windows 10, 11 (PC / Laptops)** |
+            | 🍎 **macOS (Apple Silicon & Intel)** | `Plan.Terminal_*_aarch64.dmg` / `.app` | **MacBook, Mac Mini, iMac** |
+            | 🐧 **Linux PC (Debian / Ubuntu x86_64)** | `Plan.Terminal_*_amd64.deb` | **Ubuntu, Debian, Mint PC** |
+            | 🐧 **Linux PC (AppImage x86_64)** | `Plan.Terminal_*_amd64.AppImage` | **Fedora, Arch, openSUSE PC** |
           releaseDraft: false
           prerelease: false
           projectPath: plan-terminal
@@ -61,7 +72,18 @@ jobs:
         with:
           tagName: app-${{ github.ref_name }}
           releaseName: "Plan Terminal ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
+          releaseBody: |
+            ### 📦 Download & Installation Compatibility Guide:
+
+            | Platform / Operating System | File Name to Download | Target Hardware |
+            | :--- | :--- | :--- |
+            | 🍓 **Raspberry Pi OS (32-bit `armhf`)** | `Plan.Terminal_*_armhf.deb` | **Raspberry Pi 3, 4, 5 (32-bit OS)** |
+            | 🍓 **Raspberry Pi OS (64-bit `arm64`)** | `Plan.Terminal_*_arm64.deb` | **Raspberry Pi 3, 4, 5 (64-bit OS)** |
+            | 🍓 **Raspberry Pi Portable (64-bit ARM)** | `Plan.Terminal_aarch64.app.tar.gz` | **Raspberry Pi (Portable tarball)** |
+            | 🪟 **Windows PC (64-bit)** | `Plan.Terminal_*_x64-setup.exe` | **Windows 10, 11 (PC / Laptops)** |
+            | 🍎 **macOS (Apple Silicon & Intel)** | `Plan.Terminal_*_aarch64.dmg` / `.app` | **MacBook, Mac Mini, iMac** |
+            | 🐧 **Linux PC (Debian / Ubuntu x86_64)** | `Plan.Terminal_*_amd64.deb` | **Ubuntu, Debian, Mint PC** |
+            | 🐧 **Linux PC (AppImage x86_64)** | `Plan.Terminal_*_amd64.AppImage` | **Fedora, Arch, openSUSE PC** |
           releaseDraft: false
           prerelease: false
           projectPath: plan-terminal
@@ -87,7 +109,18 @@ jobs:
         with:
           tagName: app-${{ github.ref_name }}
           releaseName: "Plan Terminal ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
+          releaseBody: |
+            ### 📦 Download & Installation Compatibility Guide:
+
+            | Platform / Operating System | File Name to Download | Target Hardware |
+            | :--- | :--- | :--- |
+            | 🍓 **Raspberry Pi OS (32-bit `armhf`)** | `Plan.Terminal_*_armhf.deb` | **Raspberry Pi 3, 4, 5 (32-bit OS)** |
+            | 🍓 **Raspberry Pi OS (64-bit `arm64`)** | `Plan.Terminal_*_arm64.deb` | **Raspberry Pi 3, 4, 5 (64-bit OS)** |
+            | 🍓 **Raspberry Pi Portable (64-bit ARM)** | `Plan.Terminal_aarch64.app.tar.gz` | **Raspberry Pi (Portable tarball)** |
+            | 🪟 **Windows PC (64-bit)** | `Plan.Terminal_*_x64-setup.exe` | **Windows 10, 11 (PC / Laptops)** |
+            | 🍎 **macOS (Apple Silicon & Intel)** | `Plan.Terminal_*_aarch64.dmg` / `.app` | **MacBook, Mac Mini, iMac** |
+            | 🐧 **Linux PC (Debian / Ubuntu x86_64)** | `Plan.Terminal_*_amd64.deb` | **Ubuntu, Debian, Mint PC** |
+            | 🐧 **Linux PC (AppImage x86_64)** | `Plan.Terminal_*_amd64.AppImage` | **Fedora, Arch, openSUSE PC** |
           releaseDraft: false
           prerelease: false
           projectPath: plan-terminal
@@ -119,7 +152,18 @@ jobs:
         with:
           tagName: app-${{ github.ref_name }}
           releaseName: "Plan Terminal ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
+          releaseBody: |
+            ### 📦 Download & Installation Compatibility Guide:
+
+            | Platform / Operating System | File Name to Download | Target Hardware |
+            | :--- | :--- | :--- |
+            | 🍓 **Raspberry Pi OS (32-bit `armhf`)** | `Plan.Terminal_*_armhf.deb` | **Raspberry Pi 3, 4, 5 (32-bit OS)** |
+            | 🍓 **Raspberry Pi OS (64-bit `arm64`)** | `Plan.Terminal_*_arm64.deb` | **Raspberry Pi 3, 4, 5 (64-bit OS)** |
+            | 🍓 **Raspberry Pi Portable (64-bit ARM)** | `Plan.Terminal_aarch64.app.tar.gz` | **Raspberry Pi (Portable tarball)** |
+            | 🪟 **Windows PC (64-bit)** | `Plan.Terminal_*_x64-setup.exe` | **Windows 10, 11 (PC / Laptops)** |
+            | 🍎 **macOS (Apple Silicon & Intel)** | `Plan.Terminal_*_aarch64.dmg` / `.app` | **MacBook, Mac Mini, iMac** |
+            | 🐧 **Linux PC (Debian / Ubuntu x86_64)** | `Plan.Terminal_*_amd64.deb` | **Ubuntu, Debian, Mint PC** |
+            | 🐧 **Linux PC (AppImage x86_64)** | `Plan.Terminal_*_amd64.AppImage` | **Fedora, Arch, openSUSE PC** |
           releaseDraft: false
           prerelease: false
           projectPath: plan-terminal
@@ -153,17 +197,16 @@ jobs:
         working-directory: plan-terminal
         run: npm install
       - name: build tauri app for Raspberry Pi 32-bit (ARMHF)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PKG_CONFIG_ALLOW_CROSS: "1"
-          PKG_CONFIG_PATH: "/usr/lib/arm-linux-gnueabihf/pkgconfig"
-          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: "arm-linux-gnueabihf-gcc"
+        run: |
+          export PKG_CONFIG_ALLOW_CROSS="1"
+          export PKG_CONFIG_PATH="/usr/lib/arm-linux-gnueabihf/pkgconfig"
+          export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER="arm-linux-gnueabihf-gcc"
+          cd plan-terminal
+          npm run tauri build -- --target armv7-unknown-linux-gnueabihf --bundles deb
+          mkdir -p artifacts
+          cp src-tauri/target/armv7-unknown-linux-gnueabihf/release/bundle/deb/*.deb artifacts/
+      - name: upload armhf release asset
+        uses: softprops/action-gh-release@v1
         with:
-          tagName: app-${{ github.ref_name }}
-          releaseName: "Plan Terminal ${{ github.ref_name }}"
-          releaseBody: "See the assets to download this version and install."
-          releaseDraft: false
-          prerelease: false
-          projectPath: plan-terminal
-          args: --target armv7-unknown-linux-gnueabihf --bundles deb
+          tag_name: app-${{ github.ref_name }}
+          files: plan-terminal/artifacts/*.deb
