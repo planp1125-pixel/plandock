@@ -118,6 +118,9 @@ jobs:
           run: |
             ulimit -s 65536 || true
             export PATH="$HOME/.cargo/bin:$PATH"
+            export CC=clang
+            export CXX=clang++
+            export CFLAGS="-O2"
             export NODE_OPTIONS="--max-old-space-size=4096"
             export CARGO_BUILD_JOBS=1
             export RUSTFLAGS="-C link-arg=-fuse-ld=lld -C codegen-units=1"
