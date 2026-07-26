@@ -9,6 +9,15 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.23] - 2026-07-26
+
+### Fixed
+- **Bi-Directional Remote SSH Configuration Syncing**: Removed `if (isTauri())` check from `broadcastHostState` in `Workspace.tsx` so SSH host, port, username, auth mode, and password fields entered in the Web app or Remote tab are immediately broadcasted to the Host over WebRTC DataChannel (`0x10`).
+
+---
+
+---
+
 ## [0.5.22] - 2026-07-26
 
 ### Fixed

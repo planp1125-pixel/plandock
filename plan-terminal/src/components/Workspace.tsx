@@ -783,9 +783,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   }, [broadcastHostState]);
 
   useEffect(() => {
-    if (isTauri()) {
-      broadcastHostState();
-    }
+    broadcastHostState();
   }, [connected, activeProtocol, connectionType, selectedPort, baudRate, dataBits, stopBits, parity, flowControl, tcpHost, tcpPort, tcpMode, sshHost, sshPort, sshUsername, sshAuthMode, sshAuthSecret, isRecording, broadcastHostState]);
 
   useEffect(() => {
