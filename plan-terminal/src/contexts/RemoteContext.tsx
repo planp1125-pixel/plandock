@@ -156,6 +156,16 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 }
             }
         }
+
+        // Ensure Web Viewer deviceId never collides with target ID in URL
+        const urlTargetId = new URLSearchParams(window.location.search).get('id');
+        if (dId && urlTargetId && dId === urlTargetId) {
+            console.warn("[RemoteContext] Web Viewer deviceId matched target ID! Regenerating distinct browser deviceId...");
+            const segment = () => Math.floor(100 + Math.random() * 900).toString();
+            dId = `${segment()}-${segment()}-${segment()}`;
+            localStorage.setItem('remote-device-id', dId);
+        }
+
         if (dId) setDeviceId(dId);
 
         const sharing = localStorage.getItem('remote-sharing-active') === 'true';
@@ -248,6 +258,17 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     addLog(`P2P DataChannel OPEN: ${channel.label} from ${peerId}`);
                     setActivePeers(prev => ({ ...prev, [peerId]: { id: peerId, status: 'connected', channel } }));
 
+                    // Log audit trail to Supabase connection_logs
+                    supabase.from('connection_logs').insert({
+                        host_device_id: peerId,
+                        client_device_id: deviceId,
+                        event_type: 'SESSION_START',
+                        details: { channel: channel.label }
+                    }).then(({ error }) => {
+                        if (error) console.error("[AuditLog] Failed to log SESSION_START:", error);
+                        else console.log("[AuditLog] Session start logged:", peerId);
+                    });
+
                     const event = new CustomEvent('remote-channel-open', { detail: { channel, fromId: peerId } });
                     window.dispatchEvent(event);
 
@@ -258,6 +279,16 @@ export const RemoteProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                             return next;
                         });
                         addLog(`P2P DataChannel CLOSED from ${peerId}`);
+
+                        // Log session end to Supabase connection_logs
+                        supabase.from('connection_logs').insert({
+                            host_device_id: peerId,
+                            client_device_id: deviceId,
+                            event_type: 'SESSION_END',
+                            details: { channel: channel.label }
+                        }).then(({ error }) => {
+                            if (error) console.error("[AuditLog] Failed to log SESSION_END:", error);
+                        });
                     };
                 },
                 (fromId, accept) => {

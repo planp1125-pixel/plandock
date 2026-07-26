@@ -9,6 +9,17 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.21] - 2026-07-26
+
+### Added
+- **100% Private Remote Mode**: Removed public online device discovery list from `RemoteAccessDialog` so active instruments are never exposed to third parties.
+- **Web Viewer ID Isolation**: Isolated Web Viewer device ID state so opening `?id=TARGET_ID` shared links never causes self-connection collisions.
+- **Supabase Audit Logging**: Integrated audit trail logging into Supabase `connection_logs` table recording `SESSION_START` and `SESSION_END` events for compliance.
+
+---
+
+---
+
 ## [0.5.20] - 2026-07-24
 
 ### Fixed

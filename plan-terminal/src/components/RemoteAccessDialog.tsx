@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { X, Share2, Search, Copy, Check, Globe, Cpu, Wifi, MonitorUp, Zap } from "lucide-react";
+import { useState } from "react";
+import { X, Share2, Search, Copy, Check, Globe, MonitorUp, Zap } from "lucide-react";
 import { supabase } from "../utils/supabase";
 import { useRemote } from "../contexts/RemoteContext";
 import { safeInvoke } from "../utils/tauri";
@@ -13,27 +13,7 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
 
     const [remoteId, setRemoteId] = useState("");
     const [copied, setCopied] = useState(false);
-    const [onlineDevices, setOnlineDevices] = useState<any[]>([]);
     const [finding, setFinding] = useState(false);
-
-    // Device Discovery Effect
-    useEffect(() => {
-        if (!isOpen) return;
-
-        const fetchDevices = async () => {
-            const { data } = await supabase
-                .from('remote_devices')
-                .select('*')
-                .in('status', ['online', 'available'])
-                .neq('id', deviceId)
-                .limit(10);
-            if (data) setOnlineDevices(data);
-        };
-
-        fetchDevices();
-        const interval = setInterval(fetchDevices, 10000);
-        return () => clearInterval(interval);
-    }, [isOpen, deviceId]);
 
     const findDevice = async () => {
         if (remoteId.length < 9) return;
@@ -199,29 +179,7 @@ export function RemoteAccessDialog({ isOpen, onClose, activeTabId }: { isOpen: b
                         </div>
                     )}
 
-                    {/* SECTION: ONLINE DISCOVERY */}
-                    {onlineDevices.length > 0 && (
-                        <div className="space-y-3">
-                            <div className="flex items-center gap-2 text-[11px] font-bold text-muted-foreground uppercase tracking-tight">
-                                <Globe className="w-3.5 h-3.5" />
-                                <span>Discovery (Online)</span>
-                            </div>
-                            <div className="grid gap-2">
-                                {onlineDevices.map(device => (
-                                    <button key={device.id} onClick={() => { setRemoteId(device.id); findDevice(); }} className="group flex items-center justify-between p-3 bg-muted/40 hover:bg-blue-500/10 border border-transparent hover:border-blue-500/30 rounded-lg transition-all text-left">
-                                        <div className="flex items-center gap-3">
-                                            <div className="p-2 bg-background rounded-full group-hover:bg-blue-500/10"><Cpu className="w-4 h-4 text-muted-foreground group-hover:text-blue-500" /></div>
-                                            <div>
-                                                <p className="text-xs font-bold">{device.name || "Unnamed Device"}</p>
-                                                <p className="text-[10px] font-mono text-muted-foreground">{device.id}</p>
-                                            </div>
-                                        </div>
-                                        <Wifi className="w-4 h-4 text-green-500 opacity-50 group-hover:opacity-100" />
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
+
 
                     {/* SECTION: MANUAL ID */}
                     <div className="space-y-3 pt-2">
