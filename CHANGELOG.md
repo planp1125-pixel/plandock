@@ -9,6 +9,16 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.22] - 2026-07-26
+
+### Fixed
+- **Interactive SSH Shell Session**: Replaced non-interactive `channel.exec("bash")` with `channel.shell()` so SSH sessions stay open continuously without immediately disconnecting.
+- **SSH DNS & Loopback Resolution**: Replaced strict IP string parsing with `ToSocketAddrs` so `127.0.0.1`, `localhost`, and IPv6 loopback resolve properly on Ubuntu Desktop and Raspberry Pi OS.
+
+---
+
+---
+
 ## [0.5.21] - 2026-07-26
 
 ### Added

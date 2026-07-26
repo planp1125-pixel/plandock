@@ -68,13 +68,17 @@ impl SshManager {
         let addr = format!("{}:{}", host, port);
         eprintln!("[SSH] [{}] Connecting to {}", tab_id, addr);
 
-        let tcp = TcpStream::connect_timeout(
-            &addr
-                .parse()
-                .map_err(|e| format!("Invalid address: {}", e))?,
-            Duration::from_secs(5),
-        )
-        .map_err(|e| format!("SSH Connection failed: {}", e))?;
+        use std::net::ToSocketAddrs;
+        let socket_addr = match addr.to_socket_addrs() {
+            Ok(mut addrs) => match addrs.next() {
+                Some(a) => a,
+                None => return Err(format!("Could not resolve address: {}", addr)),
+            },
+            Err(e) => return Err(format!("Invalid address {}: {}", addr, e)),
+        };
+
+        let tcp = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))
+            .map_err(|e| format!("SSH Connection failed: {}", e))?;
 
         let tcp_clone = tcp.try_clone().map_err(|e| e.to_string())?;
         {
@@ -134,7 +138,10 @@ impl SshManager {
             };
 
             let _ = channel.request_pty("xterm", None, Some((120, 40, 0, 0)));
-            let _ = channel.exec("bash");
+            if channel.shell().is_err() {
+                let _ = app_clone.emit("ssh-disconnected", tab_id_str.clone());
+                return;
+            }
             sess.set_blocking(false);
 
             let mut buf = vec![0u8; 4096];
