@@ -224,6 +224,12 @@ export class RemoteSignaling {
         if (this.isTauriPlatform) {
             const tabId = "remote-" + Math.random().toString(36).substring(7);
             safeInvoke('connect_remote', { tabId, deviceId: targetId })
+                .then(() => {
+                    // Tell App.tsx to open a new tab for this remote connection!
+                    import('@tauri-apps/api/event').then(({ emit }) => {
+                        emit('remote-tab-created', [tabId, targetId, "Remote Session"]);
+                    });
+                })
                 .catch(e => console.error("Failed to connect via Rust:", e));
             return null;
         } else {

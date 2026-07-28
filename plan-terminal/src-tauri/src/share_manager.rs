@@ -667,6 +667,17 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                             // Only HOST should write to physical serial. Clients have "remote-x" tab IDs which won't write properly if they don't own it.
                             if !tab_id.starts_with("remote-") {
                                 let _ = ctx.serial.write_data(&ctx.app, &tab_id, actual_payload.to_vec(), "TX_REMOTE");
+                            } else {
+                                // Viewer receiving data from Host -> emit to frontend
+                                use tauri::Emitter;
+                                let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
+                                let payload_str = serde_json::to_string(&(
+                                    tab_id.clone(),
+                                    actual_payload.to_vec(),
+                                    "SERIAL",
+                                    dir_str
+                                )).unwrap();
+                                let _ = ctx.app.emit("serial-data", payload_str);
                             }
                         }
                     } else {
@@ -685,7 +696,19 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                     if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
                         let tab_id_str: &String = tab_id.value();
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
-                            let _ = ctx.ssh.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
+                            if !tab_id_str.starts_with("remote-") {
+                                let _ = ctx.ssh.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
+                            } else {
+                                use tauri::Emitter;
+                                let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
+                                let payload_str = serde_json::to_string(&(
+                                    tab_id_str.clone(),
+                                    actual_payload.to_vec(),
+                                    "SSH",
+                                    dir_str
+                                )).unwrap();
+                                let _ = ctx.app.emit("serial-data", payload_str);
+                            }
                         }
                     }
                 }
@@ -698,7 +721,19 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                     if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
                         let tab_id_str: &String = tab_id.value();
                         if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
-                            let _ = ctx._tcp.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
+                            if !tab_id_str.starts_with("remote-") {
+                                let _ = ctx._tcp.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
+                            } else {
+                                use tauri::Emitter;
+                                let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
+                                let payload_str = serde_json::to_string(&(
+                                    tab_id_str.clone(),
+                                    actual_payload.to_vec(),
+                                    "TCP",
+                                    dir_str
+                                )).unwrap();
+                                let _ = ctx.app.emit("serial-data", payload_str);
+                            }
                         }
                     }
                 }
@@ -1039,6 +1074,7 @@ pub async fn connect_remote(app: AppHandle, _tab_id: String, device_id: String) 
 
     // Always use "serial-bridge" so broadcast_remote_data can find this channel
     let dc = pc.create_data_channel("serial-bridge", None).await.unwrap();
+    DC_TAB_MAP.insert("serial-bridge".to_string(), _tab_id.clone());
     setup_data_channel(device_id.clone(), dc, Some(app)).await;
 
     let offer = pc.create_offer(None).await.unwrap();
