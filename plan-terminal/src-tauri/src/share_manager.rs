@@ -631,17 +631,45 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
             let _ = ctx.app.emit("remote-channel-open", (peer_id.clone(), label.clone()));
         }
     } else if label == "serial-bridge" {
-        // HOST-SIDE: Map the generic mirror channel to the 'main' tab by default
-        println!("[WEBRTC] Mapping generic bridge '{}' to 'main' tab on HOST", label);
-        DC_TAB_MAP.insert("serial-bridge".to_string(), "main".to_string());
-        
-        // Notify frontend that the peer and bridge are ready
-        if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
-            use tauri::Emitter;
-            let _ = ctx.app.emit("remote-peer-connected", peer_id.clone());
-            let _ = ctx.app.emit("remote-channel-open", (peer_id.clone(), label.clone()));
+        if app_handle.is_none() {
+            // HOST-SIDE: Map the generic mirror channel to the 'main' tab by default
+            println!("[WEBRTC] Mapping generic bridge '{}' to 'main' tab on HOST", label);
+            DC_TAB_MAP.insert("serial-bridge".to_string(), "main".to_string());
+            
+            // Notify frontend that the peer and bridge are ready
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let _ = ctx.app.emit("remote-peer-connected", peer_id.clone());
+                let _ = ctx.app.emit("remote-channel-open", (peer_id.clone(), label.clone()));
+            }
         }
     }
+
+    let label_c = label.clone();
+    let peer_id_c2 = peer_id.clone();
+    let app_handle_c2 = app_handle.clone();
+    let d_c2 = Arc::clone(&d);
+    d.on_open(Box::new(move || {
+        let label = label_c.clone();
+        let peer_id = peer_id_c2.clone();
+        let is_viewer = app_handle_c2.is_some();
+        let d_inner = d_c2.clone();
+        Box::pin(async move {
+            println!("[WEBRTC] DataChannel '{}' OPEN with peer {}", label, peer_id);
+            if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                use tauri::Emitter;
+                let _ = ctx.app.emit("remote-channel-open", (peer_id.clone(), label.clone()));
+            }
+            if is_viewer && label == "serial-bridge" {
+                // Viewer automatically requests ports and state sync once connected
+                let req_ports = vec![0x02, 0x0E]; // Request Port List
+                let _ = d_inner.send(&req_ports.into()).await;
+                
+                let req_sync = vec![0x02, 0x04]; // Request Sync (Viewer -> Host)
+                let _ = d_inner.send(&req_sync.into()).await;
+            }
+        })
+    }));
 
     let d_c = Arc::clone(&d);
     let peer_id_c = peer_id.clone();
@@ -668,16 +696,9 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                             if !tab_id.starts_with("remote-") {
                                 let _ = ctx.serial.write_data(&ctx.app, &tab_id, actual_payload.to_vec(), "TX_REMOTE");
                             } else {
-                                // Viewer receiving data from Host -> emit to frontend
                                 use tauri::Emitter;
                                 let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
-                                let payload_str = serde_json::to_string(&(
-                                    tab_id.clone(),
-                                    actual_payload.to_vec(),
-                                    "SERIAL",
-                                    dir_str
-                                )).unwrap();
-                                let _ = ctx.app.emit("serial-data", payload_str);
+                                let _ = ctx.app.emit("serial-data", (tab_id.clone(), actual_payload.to_vec(), 0u128, dir_str));
                             }
                         }
                     } else {
@@ -701,13 +722,7 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                             } else {
                                 use tauri::Emitter;
                                 let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
-                                let payload_str = serde_json::to_string(&(
-                                    tab_id_str.clone(),
-                                    actual_payload.to_vec(),
-                                    "SSH",
-                                    dir_str
-                                )).unwrap();
-                                let _ = ctx.app.emit("serial-data", payload_str);
+                                let _ = ctx.app.emit("serial-data", (tab_id_str.clone(), actual_payload.to_vec(), 0u128, dir_str));
                             }
                         }
                     }
@@ -726,13 +741,7 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                             } else {
                                 use tauri::Emitter;
                                 let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
-                                let payload_str = serde_json::to_string(&(
-                                    tab_id_str.clone(),
-                                    actual_payload.to_vec(),
-                                    "TCP",
-                                    dir_str
-                                )).unwrap();
-                                let _ = ctx.app.emit("serial-data", payload_str);
+                                let _ = ctx.app.emit("serial-data", (tab_id_str.clone(), actual_payload.to_vec(), 0u128, dir_str));
                             }
                         }
                     }
@@ -1039,7 +1048,7 @@ pub async fn disconnect_peer(peer_id: String) -> Result<(), String> {
     Ok(())
 }
 
-pub async fn connect_remote(app: AppHandle, _tab_id: String, device_id: String) -> Result<(), String> {
+pub async fn connect_remote(app: AppHandle, tab_id: String, device_id: String) -> Result<(), String> {
     // let my_id = ensure_signaling_active(app.clone(), "unknown".to_string(), "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string()).await?; // GCP Server
     let my_id = ensure_signaling_active(app.clone(), "unknown".to_string(), "wss://plan-signal.onrender.com/ws".to_string()).await?;
     let api = create_webrtc_api();
@@ -1074,7 +1083,7 @@ pub async fn connect_remote(app: AppHandle, _tab_id: String, device_id: String) 
 
     // Always use "serial-bridge" so broadcast_remote_data can find this channel
     let dc = pc.create_data_channel("serial-bridge", None).await.unwrap();
-    DC_TAB_MAP.insert("serial-bridge".to_string(), _tab_id.clone());
+    DC_TAB_MAP.insert("serial-bridge".to_string(), tab_id.clone());
     setup_data_channel(device_id.clone(), dc, Some(app)).await;
 
     let offer = pc.create_offer(None).await.unwrap();
