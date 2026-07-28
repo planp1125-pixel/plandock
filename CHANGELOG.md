@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.24] - 2026-07-28
+
+### Added & Fixed
+- **Desktop-to-Desktop Remote View**: Fixed an issue where connecting a Plan Terminal Desktop app to another Plan Terminal Desktop app via a Remote ID failed to display data. The Rust backend now properly maps the WebRTC DataChannel to the frontend tab, enabling seamless P2P remote viewing of Serial, TCP, and SSH sessions between two native desktop applications.
+
+---
+
 ## [0.5.23] - 2026-07-26
 
 ### Fixed
