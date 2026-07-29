@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.29] - 2026-07-30
+
+### Fixed
+- **Process Suspension Fix on Shell Spawn**: Removed `-i` (Interactive Mode) flag from shell Command spawn in `shell_manager.rs`. When spawned in background background jobs or non-TTY sessions, `bash -i` attempts TTY job control and receives Linux `SIGTTIN`/`SIGTTOU` signals, which caused Linux to suspend the host application (`Stopped npm run tauri dev`). Setting `TERM=xterm-256color` without `-i` allows local shell sessions to connect reliably without process suspension.
+
+---
+
 ## [0.5.28] - 2026-07-29
 
 ### Fixed

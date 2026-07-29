@@ -73,9 +73,7 @@ impl ShellManager {
         eprintln!("[SHELL] [{}] Spawning shell: {}", tab_id, shell_cmd);
 
         let mut cmd = Command::new(&shell_cmd);
-        if shell_cmd.contains("bash") || shell_cmd.contains("zsh") || shell_cmd.contains("sh") {
-            cmd.arg("-i");
-        }
+        cmd.env("TERM", "xterm-256color");
         cmd.stdin(Stdio::piped())
            .stdout(Stdio::piped())
            .stderr(Stdio::piped());
@@ -90,9 +88,7 @@ impl ShellManager {
             };
             eprintln!("[SHELL] [{}] Failed to spawn '{}', falling back to: {}", tab_id, shell_cmd, fallback_cmd);
             let mut fb_cmd = Command::new(&fallback_cmd);
-            if fallback_cmd.contains("bash") || fallback_cmd.contains("zsh") || fallback_cmd.contains("sh") {
-                fb_cmd.arg("-i");
-            }
+            fb_cmd.env("TERM", "xterm-256color");
             fb_cmd.stdin(Stdio::piped())
                   .stdout(Stdio::piped())
                   .stderr(Stdio::piped());
