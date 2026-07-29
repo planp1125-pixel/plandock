@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, memo } from "react";
 import { safeInvoke, safeListen, safeOpen, safeSave, isTauri, safeWriteTextFile } from "../utils/tauri";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { Terminal, LogEntry } from "./Terminal";
+import { VncCanvas } from "./VncCanvas";
 import { SequenceEditor } from "./SequenceEditor";
 import { ReactionEditor } from "./ReactionEditor";
 import { Project, Sequence, Reaction, PortInfo } from "../types";
@@ -353,7 +354,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           }
         }
 
-        const gap = Number(localStorage.getItem('terminal-ts-gap') || '100');
+        const gap = Number(localStorage.getItem('terminal-ts-gap') || '500');
         const aggregatedBatch: { bytes: number[], ts: number, dir: string }[] = [];
 
         for (const item of batch) {
@@ -364,6 +365,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               for (let i = 0; i < item.bytes.length; i++) {
                 lastAgg.bytes.push(item.bytes[i]);
               }
+              // Slide timestamp forward for continuous coalescing
+              lastAgg.ts = item.ts;
               continue;
             }
           }
@@ -387,6 +390,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 data: newData,
                 processedData: filterAnsi(newData)
               };
+              // Slide the timestamp window forward so continuous typing keeps merging
+              lastRef.current = { ...last, timestamp: item.ts };
             } else {
               const id = Math.random().toString(36).substr(2, 9);
               lastRef.current = { id, timestamp: item.ts, direction: item.dir };
@@ -414,7 +419,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
     return () => clearInterval(interval);
   }, []);
 
-  const [connectionType, setConnectionType] = useState<'Serial' | 'TCP' | 'SSH' | 'Remote'>('Serial');
+  const [connectionType, setConnectionType] = useState<'Serial' | 'TCP' | 'SSH' | 'Terminal' | 'VNC' | 'Remote'>('Serial');
 
   useEffect(() => {
     // Removed forced 'Remote' connection type
@@ -676,6 +681,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
   const [sshUsername, setSshUsername] = useState('pi');
   const [sshAuthMode, setSshAuthMode] = useState<'password' | 'private_key'>('password');
   const [sshAuthSecret, setSshAuthSecret] = useState('');
+  const [shellCmd, setShellCmd] = useState('Auto');
+  const [vncHost, setVncHost] = useState('127.0.0.1');
+  const [vncPort, setVncPort] = useState(5900);
+  const [vncPassword, setVncPassword] = useState('');
 
   const tcpStateRef = useRef({ type: connectionType, mode: tcpMode, port: tcpPort });
 
@@ -1241,10 +1250,54 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           sshBytes.push(10); // Append LF (\n)
         }
         await safeInvoke("send_ssh_data", { tabId, data: sshBytes });
+      } else if (connectionType === 'Terminal') {
+        const shellBytes = [...bytes];
+        if (shellBytes.length > 0 && shellBytes[shellBytes.length - 1] !== 10 && shellBytes[shellBytes.length - 1] !== 13) {
+          shellBytes.push(10); // Append LF (\n)
+        }
+        await safeInvoke("send_local_shell_data", { tabId, data: shellBytes });
       }
     } catch (e) {
-      console.error(e);
-      alert("Failed to send: " + e);
+      console.error("[Send] Send failed:", e);
+    }
+  };
+
+  const handleSendRawKey = async (keyStr: string) => {
+    const bytes = Array.from(new TextEncoder().encode(keyStr));
+    try {
+      if (!isTauri() && remoteChannel) {
+        const payload = new Uint8Array(2 + bytes.length);
+        payload[0] = connectionType === 'SSH' ? 0x03 : (connectionType === 'Terminal' ? 0x05 : 0x01);
+        payload[1] = 0x01; // Direction: TX
+        payload.set(bytes, 2);
+        if (typeof remoteChannel.send === 'function') {
+          remoteChannel.send(payload);
+        }
+        return;
+      }
+
+      if (remoteChannel) {
+        const payload = new Uint8Array(2 + bytes.length);
+        payload[0] = connectionType === 'SSH' ? 0x03 : (connectionType === 'Terminal' ? 0x05 : 0x01);
+        payload[1] = 0x01; // Direction: TX
+        payload.set(bytes, 2);
+        if (typeof remoteChannel.send === 'function') {
+          remoteChannel.send(payload);
+        } else {
+          await safeInvoke('send_remote_data', { peerId, label: remoteChannel.label, data: Array.from(payload) });
+        }
+        incomingQueue.current.push({ bytes, ts: Date.now(), dir: "TX" });
+      } else if (connectionType === 'Terminal') {
+        await safeInvoke("send_local_shell_data", { tabId, data: bytes });
+      } else if (connectionType === 'SSH') {
+        await safeInvoke("send_ssh_data", { tabId, data: bytes });
+      } else if (connectionType === 'Serial') {
+        await safeInvoke("send_serial_data", { tabId, data: bytes });
+      } else if (connectionType === 'TCP') {
+        await safeInvoke("send_tcp_data", { tabId, data: bytes });
+      }
+    } catch (e) {
+      console.error("[RawKey] Send failed:", e);
     }
   };
 
@@ -1284,7 +1337,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           sshPort,
           sshUsername,
           sshAuthMode,
-          sshAuthSecret
+          sshAuthSecret,
+          shellCmd,
+          vncHost,
+          vncPort,
+          vncPassword
         };
         const configBytes = new TextEncoder().encode(JSON.stringify(config));
         const payload = new Uint8Array(2 + configBytes.length);
@@ -1329,6 +1386,13 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             authMode: sshAuthMode,
             authSecret: sshAuthSecret
           });
+        } else if (protocol === "Terminal") {
+          await safeInvoke("open_local_shell", {
+            tabId,
+            requestedShell: shellCmd
+          });
+        } else if (protocol === "VNC") {
+          // VncCanvas component manages socket open on mount to prevent handshake drop
         } else if (protocol === "Remote") {
           await safeInvoke("connect_remote", { tabId, deviceId: remoteDeviceId });
         }
@@ -1336,9 +1400,12 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
       setActiveProtocol(protocol);
       setConnected(true);
-      onConnectionStatusChange(tabId, true, protocol === "Serial" ? selectedPort : protocol === "TCP" ? (tcpMode === 'server' ? `Listening on ${tcpPort}` : tcpHost) : protocol === "SSH" ? sshHost : "Remote");
+      onConnectionStatusChange(tabId, true, protocol === "Serial" ? selectedPort : protocol === "TCP" ? (tcpMode === 'server' ? `Listening on ${tcpPort}` : tcpHost) : protocol === "SSH" ? sshHost : protocol === "Terminal" ? "Local Terminal" : protocol === "VNC" ? `VNC (${vncHost}:${vncPort})` : "Remote");
     } catch (e) {
+      console.error(e);
       alert("Connection failed: " + e);
+      setConnected(false);
+      onConnectionStatusChange(tabId, false, '');
     } finally {
       setIsConnecting(false);
     }
@@ -1363,6 +1430,10 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           await safeInvoke("disconnect_tcp", { tabId });
         } else if (protocolToDisconnect === "SSH") {
           await safeInvoke("disconnect_ssh", { tabId });
+        } else if (protocolToDisconnect === "Terminal") {
+          await safeInvoke("disconnect_local_shell", { tabId });
+        } else if (protocolToDisconnect === "VNC") {
+          await safeInvoke("disconnect_vnc", { tabId });
         } else if (protocolToDisconnect === "Remote") {
           if (remoteChannel && remoteChannel.close) {
             remoteChannel.close();
@@ -1539,6 +1610,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 <option value="Serial">Serial</option>
                 <option value="TCP">TCP</option>
                 <option value="SSH">SSH</option>
+                <option value="Terminal">Local Shell</option>
+                <option value="VNC">VNC (Remote Desktop)</option>
               </select>
               <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none opacity-50" style={{ color: 'hsl(var(--foreground))' }} />
             </>
@@ -1799,8 +1872,7 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
             </>
           ) : connectionType === 'Remote' ? (
             <div className="flex-1" /> // Spacer for remote mode
-          ) : (
-
+          ) : connectionType === 'SSH' ? (
             <>
               <input
                 type="text"
@@ -1924,7 +1996,73 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
                 </div>
               )}
             </>
-          )}
+          ) : connectionType === 'Terminal' ? (
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-zinc-400 font-semibold select-none">Shell:</span>
+              <select
+                className="w-28 rounded px-2 py-1 text-sm outline-none border focus:ring-1 focus:ring-zinc-500 cursor-pointer"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                value={shellCmd}
+                onChange={(e) => setShellCmd(e.target.value)}
+                disabled={connected}
+              >
+                <option value="Auto">Auto (Default Shell)</option>
+                <option value="/bin/bash">Linux: bash</option>
+                <option value="/bin/zsh">macOS / Linux: zsh</option>
+                <option value="powershell.exe">Windows: PowerShell</option>
+                <option value="cmd.exe">Windows: CMD</option>
+              </select>
+            </div>
+          ) : connectionType === 'VNC' ? (
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-zinc-400 font-semibold select-none">Host:</span>
+              <input
+                type="text"
+                className="w-28 rounded px-2 py-1 outline-none border focus:ring-1 focus:ring-zinc-500"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                value={vncHost}
+                onChange={(e) => setVncHost(e.target.value)}
+                disabled={connected}
+                placeholder="127.0.0.1"
+              />
+              <span className="text-zinc-400 font-semibold select-none">:</span>
+              <input
+                type="number"
+                className="w-16 rounded px-2 py-1 outline-none border focus:ring-1 focus:ring-zinc-500"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                value={vncPort}
+                onChange={(e) => setVncPort(Number(e.target.value))}
+                disabled={connected}
+                placeholder="5900"
+              />
+              <span className="text-zinc-400 font-semibold select-none">Pass:</span>
+              <input
+                type="password"
+                className="w-24 rounded px-2 py-1 outline-none border focus:ring-1 focus:ring-zinc-500"
+                style={{
+                  backgroundColor: 'hsl(var(--background))',
+                  borderColor: 'hsl(var(--border))',
+                  color: 'hsl(var(--foreground))',
+                }}
+                value={vncPassword}
+                onChange={(e) => setVncPassword(e.target.value)}
+                disabled={connected}
+                placeholder="Optional"
+              />
+            </div>
+          ) : null}
 
           {/* Connection Status Label */}
           <div className="flex flex-col">
@@ -2218,44 +2356,61 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
               </div>
             )}
 
-            <Terminal
-              logs={logs}
-              onClear={() => setLogs([])}
-              isActive={isActive}
-              autoScroll={autoScroll}
-              setAutoScroll={setAutoScroll}
-              onSendCommand={async (cmd: string) => {
-                try {
-                  if (!isTauri() && remoteChannel) {
-                    const isSsh = connectionType === 'SSH';
-                    const isTcp = connectionType === 'TCP';
-                    // SSH may not want \r\n added manually if the xterm/terminal handles it, but let's add it for consistency if needed.
-                    const suffix = isSsh ? '\n' : '\r\n';
-                    const bytes = new TextEncoder().encode(cmd + suffix);
+            {connectionType === 'VNC' ? (
+              <VncCanvas
+                tabId={tabId}
+                host={vncHost}
+                port={vncPort}
+                password={vncPassword}
+                isActive={isActive}
+                connected={connected}
+                remoteChannel={remoteChannel}
+                peerId={peerId}
+                onDisconnect={handleDisconnect}
+              />
+            ) : (
+              <Terminal
+                logs={logs}
+                onClear={() => setLogs([])}
+                onSendRawKey={handleSendRawKey}
+                isActive={isActive}
+                autoScroll={autoScroll}
+                setAutoScroll={setAutoScroll}
+                onSendCommand={async (cmd: string) => {
+                  try {
+                    if (!isTauri() && remoteChannel) {
+                      const isSsh = connectionType === 'SSH';
+                      const isTcp = connectionType === 'TCP';
+                      const suffix = isSsh ? '\n' : '\r\n';
+                      const bytes = new TextEncoder().encode(cmd + suffix);
 
-                    let typeByte = 0x01; // Serial
-                    if (isSsh) typeByte = 0x03;
-                    if (isTcp) typeByte = 0x04;
+                      let typeByte = 0x01; // Serial
+                      if (isSsh) typeByte = 0x03;
+                      if (isTcp) typeByte = 0x04;
 
-                    const packet = new Uint8Array([typeByte, 1, ...bytes]); // 1 = TX direction
-                    remoteChannel.send(packet);
-                    addLog(`Sent remote command: ${cmd.trim()}`);
-                  } else if (connectionType === 'SSH') {
-                    const bytes = Array.from(new TextEncoder().encode(cmd + '\n'));
-                    await safeInvoke("send_ssh_data", { tabId, data: bytes });
-                  } else if (connectionType === 'TCP') {
-                    const bytes = Array.from(new TextEncoder().encode(cmd + '\r\n'));
-                    await safeInvoke("send_tcp_data", { tabId, data: bytes });
-                  } else if (connectionType === 'Serial') {
-                    const bytes = Array.from(new TextEncoder().encode(cmd + '\r\n'));
-                    await safeInvoke("send_serial_data", { tabId, data: bytes });
+                      const packet = new Uint8Array([typeByte, 1, ...bytes]); // 1 = TX direction
+                      remoteChannel.send(packet);
+                      addLog(`Sent remote command: ${cmd.trim()}`);
+                    } else if (connectionType === 'SSH') {
+                      const bytes = Array.from(new TextEncoder().encode(cmd + '\n'));
+                      await safeInvoke("send_ssh_data", { tabId, data: bytes });
+                    } else if (connectionType === 'TCP') {
+                      const bytes = Array.from(new TextEncoder().encode(cmd + '\r\n'));
+                      await safeInvoke("send_tcp_data", { tabId, data: bytes });
+                    } else if (connectionType === 'Terminal') {
+                      const bytes = Array.from(new TextEncoder().encode(cmd.endsWith('\n') ? cmd : cmd + '\n'));
+                      await safeInvoke("send_local_shell_data", { tabId, data: bytes });
+                    } else if (connectionType === 'Serial') {
+                      const bytes = Array.from(new TextEncoder().encode(cmd + '\r\n'));
+                      await safeInvoke("send_serial_data", { tabId, data: bytes });
+                    }
+                  } catch (e) {
+                    console.error(`Failed to send ${connectionType} command:`, e);
+                    addLog(`Error sending command: ${e}`);
                   }
-                } catch (e) {
-                  console.error(`Failed to send ${connectionType} command:`, e);
-                  addLog(`Error sending command: ${e}`);
-                }
-              }}
-            />
+                }}
+              />
+            )}
           </div>
         </div>
       </main>

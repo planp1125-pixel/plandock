@@ -330,15 +330,9 @@ impl SshManager {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_millis();
-            let _ = app.emit(
-                "serial-data",
-                (
-                    tab_id.to_string(),
-                    data.clone(),
-                    ts as u64,
-                    "TX".to_string(),
-                ),
-            );
+            // Don't emit TX serial-data for SSH — the SSH server echoes input
+            // back as RX, so displaying TX would cause doubled per-character lines.
+            // We still log to file and broadcast to remote peers below.
             
             let label = if tab_id == "main" { "serial-bridge".to_string() } else { format!("serial-{}", tab_id) };
             let data_to_broadcast = data.clone();

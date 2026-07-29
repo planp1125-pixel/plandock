@@ -65,6 +65,8 @@ pub struct ManagerContext {
     pub serial: Arc<SerialManager>,
     pub _tcp: Arc<TcpManager>,
     pub ssh: Arc<SshManager>,
+    pub shell: Arc<crate::shell_manager::ShellManager>,
+    pub vnc: Arc<crate::vnc_manager::VncManager>,
     pub app: AppHandle,
 }
 
@@ -479,6 +481,8 @@ pub async fn start_sharing(
     serial: Arc<SerialManager>,
     tcp: Arc<TcpManager>,
     ssh: Arc<SshManager>,
+    shell: Arc<crate::shell_manager::ShellManager>,
+    vnc: Arc<crate::vnc_manager::VncManager>,
     name: String,
     signal_url: String
 ) -> Result<String, String> {
@@ -487,6 +491,8 @@ pub async fn start_sharing(
         serial,
         _tcp: tcp,
         ssh,
+        shell,
+        vnc,
         app: app.clone(),
     });
 
@@ -746,6 +752,45 @@ async fn setup_data_channel(peer_id: String, d: Arc<RTCDataChannel>, app_handle:
                         }
                     }
                 }
+                0x05 => { // Local Shell Data from remote
+                    // The payload format is [0x05, direction_byte, ...data]
+                    if msg.data.len() < 2 { return; }
+                    let actual_payload = &msg.data[2..];
+                    
+                    let label = d_inner.label();
+                    if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
+                        let tab_id_str: &String = tab_id.value();
+                        if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                            if !tab_id_str.starts_with("remote-") {
+                                let _ = ctx.shell.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
+                            } else {
+                                use tauri::Emitter;
+                                let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
+                                let _ = ctx.app.emit("serial-data", (tab_id_str.clone(), actual_payload.to_vec(), 0u128, dir_str));
+                            }
+                        }
+                    }
+                }
+                0x06 => { // VNC RFB Stream from remote
+                    // The payload format is [0x06, direction_byte, ...data]
+                    if msg.data.len() < 2 { return; }
+                    let actual_payload = &msg.data[2..];
+
+                    let label = d_inner.label();
+                    if let Some(tab_id) = DC_TAB_MAP.get(&*label) {
+                        let tab_id_str: &String = tab_id.value();
+                        if let Some(ctx) = MANAGER_CONTEXT.lock().await.as_ref() {
+                            if !tab_id_str.starts_with("remote-") {
+                                let _ = ctx.vnc.write_data(&ctx.app, tab_id_str, actual_payload.to_vec());
+                            } else {
+                                use tauri::Emitter;
+                                let dir_str = if msg.data[1] == 1 { "TX".to_string() } else { "RX".to_string() };
+                                let _ = ctx.app.emit("vnc-data", (tab_id_str.clone(), actual_payload.to_vec(), 0u128, dir_str.clone()));
+                                let _ = ctx.app.emit("serial-data", (tab_id_str.clone(), actual_payload.to_vec(), 0u128, dir_str));
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         })
@@ -914,6 +959,13 @@ async fn handle_control_message(peer_id: String, d: Arc<RTCDataChannel>, payload
                             let auth_secret = config["sshAuthSecret"].as_str().unwrap_or("").to_string();
                             
                             ctx.ssh.connect(ctx.app.clone(), &tab_id, &host, port, &username, &auth_mode, &auth_secret).map_err(|e| e.to_string())
+                        } else if protocol == "Terminal" || protocol == "LocalShell" {
+                            let requested_shell = config["shellCmd"].as_str().unwrap_or("Auto").to_string();
+                            ctx.shell.connect(ctx.app.clone(), &tab_id, &requested_shell).map_err(|e| e.to_string())
+                        } else if protocol == "VNC" {
+                            let vnc_host = config["vncHost"].as_str().unwrap_or("127.0.0.1").to_string();
+                            let vnc_port = config["vncPort"].as_u64().unwrap_or(5900) as u16;
+                            ctx.vnc.connect(ctx.app.clone(), &tab_id, &vnc_host, vnc_port).map_err(|e| e.to_string())
                         } else {
                             Err("Unknown protocol".to_string())
                         };

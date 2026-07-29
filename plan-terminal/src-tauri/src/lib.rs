@@ -3,6 +3,8 @@ mod project_manager;
 mod tcp_manager;
 mod serial_manager;
 mod ssh_manager;
+mod shell_manager;
+mod vnc_manager;
 mod log_utils;
 mod share_manager;
 mod template;
@@ -12,6 +14,8 @@ use project_manager::{load_project, save_project, import_ptp_file, Project};
 use serial_manager::{PortInfo, SerialConfig, SerialManager};
 use tcp_manager::TcpManager;
 use ssh_manager::SshManager;
+use shell_manager::ShellManager;
+use vnc_manager::VncManager;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -462,20 +466,80 @@ fn stop_recording(tab_id: String) {
 
 
 #[tauri::command]
+fn open_local_shell(
+    app: AppHandle,
+    shell_manager: State<'_, Arc<ShellManager>>,
+    tab_id: String,
+    requested_shell: String,
+) -> Result<(), String> {
+    shell_manager.connect(app, &tab_id, &requested_shell)
+}
+
+#[tauri::command]
+fn disconnect_local_shell(shell_manager: State<'_, Arc<ShellManager>>, tab_id: String) {
+    shell_manager.disconnect(&tab_id);
+}
+
+#[tauri::command]
+fn send_local_shell_data(
+    app: AppHandle,
+    shell_manager: State<'_, Arc<ShellManager>>,
+    tab_id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    shell_manager.write_data(&app, &tab_id, data)
+}
+
+#[tauri::command]
+fn open_vnc(
+    app: AppHandle,
+    vnc_manager: State<'_, Arc<VncManager>>,
+    tab_id: String,
+    host: String,
+    port: u16,
+) -> Result<(), String> {
+    vnc_manager.connect(app, &tab_id, &host, port)
+}
+
+#[tauri::command]
+fn disconnect_vnc(vnc_manager: State<'_, Arc<VncManager>>, tab_id: String) {
+    vnc_manager.disconnect(&tab_id);
+}
+
+#[tauri::command]
+fn send_vnc_data(
+    app: AppHandle,
+    vnc_manager: State<'_, Arc<VncManager>>,
+    tab_id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    eprintln!("[VNC CMD] send_vnc_data called for tab: {}, data len: {}", tab_id, data.len());
+    vnc_manager.write_data(&app, &tab_id, data)
+}
+
+#[tauri::command]
+fn is_vnc_connected(vnc_manager: State<'_, Arc<VncManager>>, tab_id: String) -> bool {
+    vnc_manager.is_connected(&tab_id)
+}
+
+#[tauri::command]
 async fn start_remote_sharing(
     app: AppHandle,
     serial: State<'_, Arc<SerialManager>>,
     tcp: State<'_, Arc<TcpManager>>,
     ssh: State<'_, Arc<SshManager>>,
+    shell: State<'_, Arc<ShellManager>>,
+    vnc: State<'_, Arc<VncManager>>,
     name: String
 ) -> Result<String, String> {
-    // let signal_url = "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string(); // GCP Server
     let signal_url = "wss://plan-signal.onrender.com/ws".to_string();
     share_manager::start_sharing(
         app,
         serial.inner().clone(),
         tcp.inner().clone(),
         ssh.inner().clone(),
+        shell.inner().clone(),
+        vnc.inner().clone(),
         name,
         signal_url
     ).await
@@ -517,10 +581,14 @@ pub fn run() {
             let serial = Arc::new(SerialManager::new());
             let tcp    = Arc::new(TcpManager::new());
             let ssh    = Arc::new(SshManager::new());
+            let shell  = Arc::new(ShellManager::new());
+            let vnc    = Arc::new(VncManager::new());
 
             app.manage(serial.clone());
             app.manage(tcp.clone());
             app.manage(ssh.clone());
+            app.manage(shell.clone());
+            app.manage(vnc.clone());
 
             // AUTO-INIT SIGNALING — claim device ID, set MANAGER_CONTEXT, notify frontend
             let app_handle = app.handle().clone();
@@ -528,22 +596,19 @@ pub fn run() {
                 match share_manager::ensure_signaling_active(
                     app_handle.clone(),
                     "unknown".to_string(),
-                    // "wss://plan-signal-29066723448.asia-south1.run.app/ws".to_string() // GCP Server
                     "wss://plan-signal.onrender.com/ws".to_string()
                 ).await {
                     Ok(_device_id) => {
-                        // Mark signaling as running so the WS reconnect loop stays active
-                        // after disconnections, without requiring the user to toggle sharing.
                         *share_manager::SHARE_MANAGER.is_running.lock().await = true;
 
-                        // Set MANAGER_CONTEXT so data routing works even before user clicks "Share"
                         *share_manager::MANAGER_CONTEXT.lock().await = Some(share_manager::ManagerContext {
                             serial,
                             _tcp: tcp,
                             ssh,
+                            shell,
+                            vnc,
                             app: app_handle.clone(),
                         });
-                        // remote-id-ready is already emitted inside ensure_signaling_active
                     }
                     Err(e) => eprintln!("[SIGNAL] Auto-init failed: {}", e),
                 }
@@ -579,6 +644,13 @@ pub fn run() {
             disconnect_ssh,
             send_ssh_data,
             is_ssh_connected,
+            open_local_shell,
+            disconnect_local_shell,
+            send_local_shell_data,
+            open_vnc,
+            disconnect_vnc,
+            send_vnc_data,
+            is_vnc_connected,
             play_recording,
             start_periodic_sequence,
             stop_periodic_sequence,

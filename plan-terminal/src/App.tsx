@@ -18,7 +18,7 @@ interface Tab {
   name: string;
   connected: boolean;
   connLabel: string;
-  type?: 'Serial' | 'TCP' | 'SSH' | 'Remote';
+  type?: 'Serial' | 'TCP' | 'SSH' | 'Terminal' | 'Remote';
   remoteChannel?: any;
   peerId?: string;
 }

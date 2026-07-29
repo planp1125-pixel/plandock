@@ -52,6 +52,13 @@ export interface SshConfig {
     auth_secret?: string; // e.g. path to private key
 }
 
+export interface VncConfig {
+    host: string;
+    port: number;
+    password?: string;
+    viewOnly?: boolean;
+}
+
 export interface RemoteConfig {
     deviceId: string;
 }
@@ -61,10 +68,11 @@ export interface Project {
     send_sequences: Sequence[];
     reactions: Reaction[];
     file_path?: string;
-    connection_type?: 'Serial' | 'TCP' | 'SSH' | 'Remote';
+    connection_type?: 'Serial' | 'TCP' | 'SSH' | 'Terminal' | 'VNC' | 'Remote';
     serial_config?: SerialConfig;
     tcp_config?: TcpConfig;
     ssh_config?: SshConfig;
+    vnc_config?: VncConfig;
     remote_config?: RemoteConfig;
     chart_configs?: any[];
 }

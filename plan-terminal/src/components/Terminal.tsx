@@ -22,6 +22,7 @@ interface Props {
     logs: LogEntry[];
     onClear: () => void;
     onSendCommand?: (cmd: string) => void;
+    onSendRawKey?: (key: string) => void;
     isActive?: boolean;
     autoScroll: boolean;
     setAutoScroll: (val: boolean) => void;
@@ -29,7 +30,7 @@ interface Props {
 
 type TimestampMode = "none" | "each" | "line";
 
-export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScroll, setAutoScroll }: Props) => {
+export const Terminal = memo(({ logs, onClear, onSendCommand, onSendRawKey, isActive, autoScroll, setAutoScroll }: Props) => {
     const bottomRef = useRef<HTMLDivElement>(null);
     const searchInputRef = useRef<HTMLInputElement>(null);
     const cmdInputRef = useRef<HTMLInputElement>(null);
@@ -89,6 +90,82 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
             setSearchQuery("");
         }
     }, [searchOpen, onClear, isActive]);
+
+    const [isScreenFocused, setIsScreenFocused] = useState(false);
+    const [screenDraft, setScreenDraft] = useState("");
+
+    const handleScreenKeyDown = useCallback((e: React.KeyboardEvent) => {
+        if (!onSendRawKey && !onSendCommand) return;
+
+        // For interactive shells (SSH, Terminal), send every keystroke immediately
+        // so the remote/local shell handles echoing, tab-completion, and history natively.
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            onSendRawKey?.('\t');
+            return;
+        }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            onSendRawKey?.('\r');
+            return;
+        }
+        if (e.key === 'Backspace') {
+            e.preventDefault();
+            onSendRawKey?.('\x7f'); // DEL character — what terminals actually send for Backspace
+            return;
+        }
+        if (e.key === 'Delete') {
+            e.preventDefault();
+            onSendRawKey?.('\x1b[3~');
+            return;
+        }
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            onSendRawKey?.('\x1b[A');
+            return;
+        }
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            onSendRawKey?.('\x1b[B');
+            return;
+        }
+        if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            onSendRawKey?.('\x1b[C');
+            return;
+        }
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            onSendRawKey?.('\x1b[D');
+            return;
+        }
+        if (e.ctrlKey && e.key.toLowerCase() === 'c') {
+            e.preventDefault();
+            setScreenDraft("");
+            onSendRawKey?.('\x03');
+            return;
+        }
+        if (e.ctrlKey && e.key.toLowerCase() === 'z') {
+            e.preventDefault();
+            onSendRawKey?.('\x1a');
+            return;
+        }
+        if (e.ctrlKey && e.key.toLowerCase() === 'l') {
+            e.preventDefault();
+            onSendRawKey?.('\x0c');
+            return;
+        }
+        if (e.ctrlKey && e.key.toLowerCase() === 'd') {
+            e.preventDefault();
+            onSendRawKey?.('\x04');
+            return;
+        }
+        // Send printable characters immediately
+        if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            e.preventDefault();
+            onSendRawKey?.(e.key);
+        }
+    }, [onSendRawKey, onSendCommand]);
 
     useEffect(() => {
         window.addEventListener('keydown', handleKeyDown);
@@ -228,25 +305,30 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
                             b === 27 ? "text-purple-500" :
                                 b === 29 ? "text-teal-500" : "text-zinc-500";
 
-                    elements.push(
-                        <span key={`c-${i}`}>
-                            <span className={clsx("font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5", color)}>
-                                &lt;{name}&gt;
+                    // Only show control character badges (<LF>, <CR>) if stripAnsi is false
+                    if (!stripAnsi) {
+                        elements.push(
+                            <span key={`c-${i}`}>
+                                <span className={clsx("font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5", color)}>
+                                    &lt;{name}&gt;
+                                </span>
                             </span>
-                        </span>
-                    );
+                        );
+                    }
 
                     if (formatMode === 'Formatted') {
                         if (b === 13) {
                             if (i + 1 < bytes.length && bytes[i + 1] === 10) {
                                 i++;
-                                elements.push(
-                                    <span key={`c-${i}`}>
-                                        <span className="font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5 text-blue-500">
-                                            &lt;LF&gt;
+                                if (!stripAnsi) {
+                                    elements.push(
+                                        <span key={`c-${i}`}>
+                                            <span className="font-bold text-[10px] px-0.5 bg-zinc-800 rounded mx-0.5 text-blue-500">
+                                                &lt;LF&gt;
+                                            </span>
                                         </span>
-                                    </span>
-                                );
+                                    );
+                                }
                                 elements.push(<br key={`br-${i}`} />);
                             } else {
                                 elements.push(<br key={`br-${i}`} />);
@@ -348,23 +430,53 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
             {/* Log Area */}
             <div
                 ref={scrollContainerRef}
-                className="flex-1 overflow-y-auto p-4 space-y-1"
+                tabIndex={0}
+                onKeyDown={handleScreenKeyDown}
+                onFocus={() => setIsScreenFocused(true)}
+                onBlur={() => setIsScreenFocused(false)}
+                className={clsx(
+                    "flex-1 overflow-y-auto p-4 space-y-1 outline-none transition-all cursor-text",
+                    isScreenFocused ? "ring-1 ring-emerald-500/40 bg-black/40" : ""
+                )}
                 style={{ overflowAnchor: 'none' }}
                 onScroll={onScroll}
             >
-                {logs.slice(-400).map(log => {
-                    const processedData = log.processedData || log.data;
-                    if (searchQuery && filterMode && !getSearchableText(processedData).toLowerCase().includes(searchQuery.toLowerCase())) return null;
+                {(() => {
+                    const visibleLogs = logs.slice(-400).filter(log => {
+                        const processedData = log.processedData || log.data;
+                        return !(searchQuery && filterMode && !getSearchableText(processedData).toLowerCase().includes(searchQuery.toLowerCase()));
+                    });
+
                     return (
-                        <div key={log.id} data-log-id={log.id} className="flex gap-2 hover:bg-zinc-900/50">
-                            {timestampMode !== 'none' && <span className="text-zinc-500 select-none">[{formatTimestamp(log.timestamp)}]</span>}
-                            <span className={log.direction === 'TX' ? "text-blue-400 font-bold" : "text-orange-400 font-bold"}>{log.direction}</span>
-                            <span className={clsx("break-all whitespace-pre-wrap", log.direction === 'TX' ? "text-cyan-400" : "text-yellow-400")}>
-                                {renderData(processedData, searchQuery || undefined)}
-                            </span>
-                        </div>
+                        <>
+                            {visibleLogs.map((log, idx) => {
+                                const processedData = log.processedData || log.data;
+                                const isLast = idx === visibleLogs.length - 1;
+                                return (
+                                    <div key={log.id} data-log-id={log.id} className="flex gap-2 hover:bg-zinc-900/50">
+                                        {timestampMode !== 'none' && <span className="text-zinc-500 select-none">[{formatTimestamp(log.timestamp)}]</span>}
+                                        <span className={log.direction === 'TX' ? "text-blue-400 font-bold" : "text-orange-400 font-bold"}>{log.direction}</span>
+                                        <span className={clsx("break-all whitespace-pre-wrap font-mono", log.direction === 'TX' ? "text-cyan-400" : "text-yellow-400")}>
+                                            {renderData(processedData, searchQuery || undefined)}
+                                            {isLast && isScreenFocused && (
+                                                <span className="inline-flex items-center text-emerald-400 font-mono text-sm pl-1 gap-1">
+                                                    {screenDraft && <span className="text-cyan-300 font-bold bg-zinc-800/80 px-1 py-0.5 rounded">{screenDraft}</span>}
+                                                    <span className="animate-pulse font-bold">▋</span>
+                                                </span>
+                                            )}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                            {visibleLogs.length === 0 && isScreenFocused && (
+                                <div className="inline-flex items-center text-emerald-400 font-mono text-sm pl-1 gap-1">
+                                    {screenDraft && <span className="text-cyan-300 font-bold bg-zinc-800/80 px-1 py-0.5 rounded">{screenDraft}</span>}
+                                    <span className="animate-pulse font-bold">▋</span>
+                                </div>
+                            )}
+                        </>
                     );
-                })}
+                })()}
                 <div ref={bottomRef} />
             </div>
 
@@ -379,7 +491,11 @@ export const Terminal = memo(({ logs, onClear, onSendCommand, isActive, autoScro
                         value={cmdText}
                         onChange={e => setCmdText(e.target.value)}
                         onKeyDown={e => {
-                            if (e.key === 'Enter') {
+                            if (e.key === 'Tab') {
+                                e.preventDefault();
+                                onSendCommand(cmdText + '\t');
+                                setCmdText("");
+                            } else if (e.key === 'Enter') {
                                 if (cmdText.trim()) {
                                     onSendCommand(cmdText + '\n');
                                     setCmdText("");
