@@ -9,6 +9,17 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.27] - 2026-07-29
+
+### Fixed
+- **VNC Adapter Event Dispatch Timing**: Fixed `VncTransportAdapter` open event timing (`setTimeout(..., 0)`) so `@novnc/novnc` attaches event listeners before `open` fires.
+- **Duplicate Byte Delivery Elimination**: Removed duplicate `serial-data` fallback listener in `VncCanvas.tsx` and duplicate emission in Rust `vnc_manager.rs` to prevent binary stream corruption.
+- **Non-Blocking VNC Reader Thread**: Replaced `block_on` with `tauri::async_runtime::spawn` in `vnc_manager.rs` reader loop so TCP frame reading never stalls during WebRTC DataChannel broadcasts.
+- **Socket Low-Latency Optimization**: Added `set_nodelay(true)` and `set_read_timeout(500ms)` to VNC TCP socket streams for responsive mouse/keyboard remote desktop interaction.
+- **WebRTC Remote VNC Streaming**: Verified Internet WebRTC remote desktop sharing (packet type `0x06`) between remote clients and host machines.
+
+---
+
 ## [0.5.26] - 2026-07-29
 
 ### Added
