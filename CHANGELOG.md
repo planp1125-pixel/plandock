@@ -9,6 +9,13 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.30] - 2026-07-30
+
+### Added
+- **Automatic 1-Click VNC Remote Desktop Connection**: Added automatic defaults (`vncHost: "127.0.0.1"`, `vncPort: 5900`) in `Workspace.tsx` so users selecting VNC (Remote Desktop) can click **Connect** directly without typing host or port parameters manually.
+
+---
+
 ## [0.5.29] - 2026-07-30
 
 ### Fixed

@@ -1343,8 +1343,8 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
           sshAuthMode,
           sshAuthSecret,
           shellCmd,
-          vncHost,
-          vncPort,
+          vncHost: vncHost || "127.0.0.1",
+          vncPort: vncPort || 5900,
           vncPassword
         };
         const configBytes = new TextEncoder().encode(JSON.stringify(config));
