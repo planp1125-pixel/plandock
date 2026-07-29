@@ -9,6 +9,20 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.26] - 2026-07-29
+
+### Added
+- **VNC Remote Desktop**: Implemented full VNC client support directly within Plan Terminal. Users can now establish visual remote desktop connections to VNC servers with full mouse and keyboard event tunneling.
+- **Local Shell Support**: Added a native local terminal shell. Users can now spawn and interact with their host operating system's command-line shell directly within the application's terminal interface.
+- **VNC Setup Guide**: Added a comprehensive `VNC_SETUP_GUIDE.md` for configuring headless Raspberry Pi and Linux devices for optimal VNC performance with Plan Terminal.
+- **WebRTC Integration**: Updated the WebRTC `share_manager.rs` to seamlessly route both VNC frame buffers and Local Shell streams across P2P connections for remote viewing.
+
+### Fixed
+- **VNC Event Loop & Security**: Fixed event loop timing and VNC server security negotiation during the initial handshake sequence.
+- **TCP Packet Coalescing**: Resolved an issue with TCP packet coalescing to ensure reliable and smooth data streaming over high-latency remote connections.
+
+---
+
 ## [0.5.24] - 2026-07-28
 
 ### Added & Fixed
