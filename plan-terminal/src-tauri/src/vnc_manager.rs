@@ -55,7 +55,12 @@ impl VncManager {
         self.disconnect(tab_id);
         thread::sleep(Duration::from_millis(100));
 
-        let addr_str = format!("{}:{}", host, port);
+        let effective_host = if host.trim().is_empty() || host.chars().all(|c| c.is_ascii_digit()) {
+            "127.0.0.1"
+        } else {
+            host.trim()
+        };
+        let addr_str = format!("{}:{}", effective_host, port);
         eprintln!("[VNC] [{}] Connecting to VNC server at {}", tab_id, addr_str);
 
         let stream = match addr_str.parse() {

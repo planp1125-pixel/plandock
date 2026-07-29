@@ -557,7 +557,11 @@ export const Workspace = memo(({ tabId, isActive, darkMode, onConnectionStatusCh
 
       console.log(`[Remote] Msg Type: 0x${type.toString(16)}, Sub: 0x${bytes[1]?.toString(16)}`);
 
-      if (type === 0x01 || type === 0x03) {
+      if (type === 0x06) {
+        // VNC RFB Stream (0x06): [0x06, Dir(0=RX, 1=TX), ...bytes]
+        const payloadBytes = bytes.slice(2);
+        window.dispatchEvent(new CustomEvent('vnc-remote-bytes', { detail: payloadBytes }));
+      } else if (type === 0x01 || type === 0x03) {
         // Serial (0x01) or SSH (0x03) data: [Type, Dir(0=RX, 1=TX), ...bytes]
         const dir = bytes[1] === 1 ? "TX" : "RX";
         incomingQueue.current.push({

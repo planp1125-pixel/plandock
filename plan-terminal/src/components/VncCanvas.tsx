@@ -197,9 +197,24 @@ export const VncCanvas: React.FC<VncCanvasProps> = ({
             }
         });
 
+        const handleRemoteBytes = (e: any) => {
+            const bytes = e.detail;
+            if (!bytes) return;
+            console.log('[VNC UI] WebRTC vnc-remote-bytes received:', bytes.length, 'bytes');
+            if (bytes.length > 100) {
+                setStatus((prev) => (prev === 'connecting' ? 'connected' : prev));
+                setStatusText((prev) => (prev.startsWith('Connecting') ? `Connected to VNC Remote Desktop (${host}:${port})` : prev));
+            }
+            if (adapterRef.current) {
+                adapterRef.current.receiveData(new Uint8Array(bytes));
+            }
+        };
+        window.addEventListener('vnc-remote-bytes', handleRemoteBytes);
+
         return () => {
             unlistenData.then((fn: any) => fn());
             unlistenDisconnect.then((fn: any) => fn());
+            window.removeEventListener('vnc-remote-bytes', handleRemoteBytes);
         };
     }, [tabId]);
 

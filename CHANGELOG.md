@@ -9,6 +9,14 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.28] - 2026-07-29
+
+### Fixed
+- **Web App WebRTC VNC Packet Routing (0x06)**: Added 0x06 WebRTC binary packet handler to `remoteChannel.onmessage` in `Workspace.tsx` and `vnc-remote-bytes` event listener in `VncCanvas.tsx`, enabling full Web Browser VNC desktop viewing over the internet.
+- **Host Address Fallback**: Sanitized VNC host parameter in Rust `vnc_manager.rs` to automatically default numeric/empty string values to `127.0.0.1`.
+
+---
+
 ## [0.5.27] - 2026-07-29
 
 ### Fixed
