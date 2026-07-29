@@ -1,63 +1,73 @@
 # VNC Remote Desktop Setup Guide for Host Machines
 
-Plan Terminal includes built-in support for **VNC Remote Desktop** over WebRTC. You do **not** need to buy or install any client-side viewer software—Plan Terminal includes an embedded HTML5 VNC engine (`@novnc/novnc`).
+Plan Terminal includes built-in support for **VNC Remote Desktop** over WebRTC and native TCP. You do **not** need to buy or install any client-side viewer software—Plan Terminal includes an embedded HTML5 VNC engine (`@novnc/novnc`).
 
-To control a remote machine's desktop, the **Host Machine** (the computer whose screen you want to control) simply needs a free, open-source VNC server running on TCP port `5900`.
-
----
-
-## 1. Raspberry Pi OS (Bookworm / Wayland)
-
-Raspberry Pi OS (Bookworm) uses Wayland by default. The recommended free, open-source VNC server for Wayland is **`wayvnc`**.
-
-### Installation & Run:
-```bash
-# 1. Install wayvnc
-sudo apt update
-sudo apt install -y wayvnc
-
-# 2. Run wayvnc listening on port 5900 (local interface)
-wayvnc 127.0.0.1 5900
-```
-
-### Auto-start on Boot (Systemd Service):
-Create `/etc/systemd/system/wayvnc.service`:
-```ini
-[Unit]
-Description=WayVNC Remote Desktop Server
-After=graphical.target
-
-[Service]
-ExecStart=/usr/bin/wayvnc 127.0.0.1 5900
-Restart=always
-User=pi
-
-[Install]
-WantedBy=graphical.target
-```
-Enable it:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now wayvnc
-```
+To control a remote machine's desktop, the **Host Machine** (the computer whose screen you want to control) simply needs a free VNC server running on TCP port `5900`.
 
 ---
 
-## 2. Linux (X11 / Ubuntu / Debian)
+## 1. Raspberry Pi OS (Bookworm / Wayland & X11)
 
-For Linux systems running X11, **`x11vnc`** or **`tigervnc`** are 100% free and open-source (GPL).
+Raspberry Pi OS ships with built-in VNC support. You can choose between **x11vnc**, **wayvnc**, or **RealVNC**.
 
-### Installation & Run:
+### Option A: `x11vnc` (Recommended for X11 / Classic Desktop)
+
+1. Stop default RealVNC if running (to free port 5900):
+   ```bash
+   sudo systemctl stop vncserver-x11-serviced
+   sudo systemctl disable vncserver-x11-serviced
+   ```
+
+2. Install `x11vnc`:
+   ```bash
+   sudo apt update && sudo apt install -y x11vnc
+   ```
+
+3. Run `x11vnc`:
+   - **No password**:
+     ```bash
+     x11vnc -rfbport 5900 -nopw -forever -bg
+     ```
+   - **With password** (e.g. `mypassword`):
+     ```bash
+     x11vnc -storepasswd mypassword ~/.vnc/passwd
+     x11vnc -rfbport 5900 -rfbauth ~/.vnc/passwd -forever -bg
+     ```
+
+### Option B: `wayvnc` (Recommended for Wayland)
+
+1. Install `wayvnc`:
+   ```bash
+   sudo apt update && sudo apt install -y wayvnc
+   ```
+
+2. Run `wayvnc` listening on port `5900`:
+   ```bash
+   wayvnc 0.0.0.0 5900
+   ```
+
+### Option C: RealVNC (`vncserver-x11`)
+
+If you prefer using the pre-installed RealVNC server:
+1. Configure RealVNC for standard VNC password authentication:
+   ```bash
+   sudo vncpasswd -service
+   echo -e "Authentication=VncAuth\nEncryption=PreferOff" | sudo tee -a /etc/vnc/config.d/vncserver-x11
+   sudo systemctl restart vncserver-x11-serviced
+   ```
+
+---
+
+## 2. Linux (Ubuntu / Debian / Fedora)
+
+For Linux desktops (X11):
+
 ```bash
 # 1. Install x11vnc
-sudo apt update
-sudo apt install -y x11vnc
+sudo apt update && sudo apt install -y x11vnc
 
-# 2. Set an optional VNC password
-x11vnc -storepasswd mypassword ~/.vnc/passwd
-
-# 3. Run x11vnc on port 5900
-x11vnc -rfbport 5900 -forever -bg -rfbauth ~/.vnc/passwd
+# 2. Run x11vnc on port 5900
+x11vnc -rfbport 5900 -nopw -forever -bg
 ```
 
 ---
@@ -66,7 +76,7 @@ x11vnc -rfbport 5900 -forever -bg -rfbauth ~/.vnc/passwd
 
 Windows can use **TightVNC Server** or **UltraVNC** (100% free and open-source GPL).
 
-1. Download the free **TightVNC Server** installer from [tightvnc.com](https://www.tightvnc.com/).
+1. Download free **TightVNC Server** from [tightvnc.com](https://www.tightvnc.com/).
 2. Run the installer and select **TightVNC Server**.
 3. Set your administrative and connection password during setup.
 4. TightVNC runs automatically as a Windows service listening on port `5900`.
@@ -85,10 +95,11 @@ macOS includes a **built-in free VNC server** (Screen Sharing).
 
 ---
 
-## Connecting in Plan Terminal
+## 🔌 Connecting in Plan Terminal
 
 1. Open **Plan Terminal**.
-2. In the top connection dropdown, select **VNC (Remote Desktop)**.
-3. Set Host (`127.0.0.1` or target IP) and Port (`5900`).
-4. Click **Connect**.
-5. Enjoy full interactive remote desktop control (mouse, keyboard, scale-to-fit, view-only mode, and full screen)!
+2. In the top connection dropdown, select **`VNC (Remote Desktop)`**.
+3. Enter **Host IP** (e.g. `192.168.1.20`) and **Port** (`5900`).
+4. Enter **Password** (or leave blank if running in `-nopw` mode).
+5. Click **Connect**.
+6. Enjoy full interactive remote desktop control (mouse, keyboard, scale-to-fit, view-only mode, and full screen)!

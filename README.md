@@ -3,6 +3,9 @@
 This repository contains the Plan Terminal desktop application and its supporting signaling server.
 ## run web: http://localhost:1420/?id=000-000-023
 
+## VNC Remote Desktop Setup
+For complete instructions on setting up VNC Remote Desktop host servers (`x11vnc`, `wayvnc`, `TightVNC`, `RealVNC`, macOS Screen Sharing) on Raspberry Pi, Linux, Windows, and macOS, see the [VNC Setup Guide](VNC_SETUP_GUIDE.md).
+
 ## Deployment & Hosting Architecture
 
 ### 1. Signaling Server (`/plan-signal`)

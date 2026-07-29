@@ -77,8 +77,14 @@ impl VncManager {
         };
 
         stream
+            .set_nodelay(true)
+            .map_err(|e| format!("Failed to set nodelay: {}", e))?;
+        stream
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .map_err(|e| format!("Failed to set read timeout: {}", e))?;
+        stream
             .set_write_timeout(Some(Duration::from_secs(2)))
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Failed to set write timeout: {}", e))?;
 
         let arc_stream = Arc::new(stream);
         let tab = self.get_or_create_tab(tab_id);
@@ -114,19 +120,15 @@ impl VncManager {
                             "vnc-data",
                             (tab_id_str.clone(), data.clone(), ts as u64, "RX".to_string()),
                         );
-                        let _ = app_clone.emit(
-                            "serial-data",
-                            (tab_id_str.clone(), data.clone(), ts as u64, "RX".to_string()),
-                        );
 
-                        // Broadcast to WebRTC data channel subscribers (packet type 0x06)
+                        // Broadcast to WebRTC data channel subscribers (packet type 0x06) without blocking read loop
                         let label = if tab_id_str == "main" {
                             "serial-bridge".to_string()
                         } else {
                             format!("serial-{}", tab_id_str)
                         };
                         let data_to_broadcast = data.clone();
-                        tauri::async_runtime::block_on(async move {
+                        tauri::async_runtime::spawn(async move {
                             crate::share_manager::broadcast_remote_data(label, data_to_broadcast, 0x06).await;
                         });
                     }

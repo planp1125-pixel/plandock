@@ -19,7 +19,7 @@ interface VncCanvasProps {
 
 class VncTransportAdapter extends EventTarget {
     binaryType: string = 'arraybuffer';
-    readyState: number = 1; // 1 = OPEN
+    readyState: number = 0; // 0 = CONNECTING, 1 = OPEN
     url: string = 'wss://vnc.local';
     protocol: string = '';
     extensions: string = '';
@@ -38,6 +38,14 @@ class VncTransportAdapter extends EventTarget {
         super();
         this.sendCallback = sendCallback;
         this.closeCallback = closeCallback;
+
+        // Asynchronously dispatch open event so noVNC attaches listeners first
+        setTimeout(() => {
+            this.readyState = 1; // 1 = OPEN
+            const openEv = new Event('open');
+            this.dispatchEvent(openEv);
+            if (this._onopen) this._onopen(openEv);
+        }, 0);
     }
 
     get onopen(): ((ev: Event) => void) | null {
@@ -179,15 +187,6 @@ export const VncCanvas: React.FC<VncCanvasProps> = ({
             }
         });
 
-        const unlistenSerialFallback = safeListen<[string, number[], number, string]>('serial-data', (event: any) => {
-            const [evTabId, bytes] = event.payload;
-            if (evTabId !== tabId) return;
-            if (adapterRef.current && (!isTauri() || tabId.startsWith('remote-'))) {
-                console.log('[VNC UI] serial-data fallback received:', bytes.length, 'bytes');
-                adapterRef.current.receiveData(new Uint8Array(bytes));
-            }
-        });
-
         const unlistenDisconnect = safeListen<string>('vnc-disconnected', (event: any) => {
             if (event.payload !== tabId) return;
             console.log('[VNC UI] vnc-disconnected event received for tab:', tabId);
@@ -200,13 +199,12 @@ export const VncCanvas: React.FC<VncCanvasProps> = ({
 
         return () => {
             unlistenData.then((fn: any) => fn());
-            unlistenSerialFallback.then((fn: any) => fn());
             unlistenDisconnect.then((fn: any) => fn());
         };
     }, [tabId]);
 
     // Initialize noVNC RFB engine
-    const initVncEngine = useCallback(() => {
+    const initVncEngine = useCallback(async () => {
         if (!containerRef.current) return;
 
         console.log('[VNC UI] initVncEngine connecting to:', host, port, 'connected:', connected);
@@ -218,18 +216,23 @@ export const VncCanvas: React.FC<VncCanvasProps> = ({
             rfbRef.current = null;
         }
 
-        const adapter = new VncTransportAdapter(
-            (bytes) => sendRfbBytes(bytes),
-            () => {
-                console.log('[VNC UI] Adapter closed');
-                setStatus('disconnected');
-                setStatusText('VNC transport closed');
-            }
-        );
-        adapterRef.current = adapter;
-
         try {
-            // Instantiate noVNC RFB Engine using our custom DataChannel adapter
+            // 1. Establish TCP socket connection first
+            if (isTauri() && !tabId.startsWith('remote-')) {
+                await safeInvoke('open_vnc', { tabId, host, port });
+            }
+
+            // 2. Instantiate noVNC RFB Engine AFTER socket is active
+            const adapter = new VncTransportAdapter(
+                (bytes) => sendRfbBytes(bytes),
+                () => {
+                    console.log('[VNC UI] Adapter closed');
+                    setStatus('disconnected');
+                    setStatusText('VNC transport closed');
+                }
+            );
+            adapterRef.current = adapter;
+
             const rfb = new RFB(containerRef.current, adapter as any, {
                 credentials: { password }
             });
@@ -282,19 +285,10 @@ export const VncCanvas: React.FC<VncCanvasProps> = ({
             });
 
             rfbRef.current = rfb;
-
-            // Trigger backend connection now that listener & adapter are ready
-            if (isTauri() && !tabId.startsWith('remote-')) {
-                safeInvoke('open_vnc', { tabId, host, port }).catch((e) => {
-                    console.error('[VNC] open_vnc error:', e);
-                    setStatus('error');
-                    setStatusText(`Connection failed: ${e}`);
-                });
-            }
         } catch (e: any) {
             console.error('[VNC] Engine init error:', e);
             setStatus('error');
-            setStatusText(`Failed to initialize VNC viewer: ${e.message}`);
+            setStatusText(`Failed to connect to VNC: ${e.message || e}`);
         }
     }, [host, port, password, scaleViewport, viewOnly, sendRfbBytes, tabId]);
 
