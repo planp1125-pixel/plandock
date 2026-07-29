@@ -1,6 +1,8 @@
 # plandock (Plan Terminal)
 
 This repository contains the Plan Terminal desktop application and its supporting signaling server.
+
+## to check and ru ii local 
 ## run web: http://localhost:1420/?id=000-000-023
 
 ## VNC Remote Desktop Setup
