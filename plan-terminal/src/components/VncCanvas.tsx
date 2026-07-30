@@ -30,7 +30,6 @@ class VncTransportAdapter extends EventTarget {
     onclose: ((ev: CloseEvent) => void) | null = null;
     onerror: ((ev: Event) => void) | null = null;
 
-    private pendingBuffer: Uint8Array[] = [];
     private sendCallback: (data: Uint8Array) => void;
     private closeCallback: () => void;
 
@@ -45,7 +44,7 @@ class VncTransportAdapter extends EventTarget {
             const openEv = new Event('open');
             this.dispatchEvent(openEv);
             if (this._onopen) this._onopen(openEv);
-        }, 0);
+        }, 10);
     }
 
     get onopen(): ((ev: Event) => void) | null {
@@ -62,19 +61,19 @@ class VncTransportAdapter extends EventTarget {
 
     set onmessage(fn: ((ev: MessageEvent) => void) | null) {
         this._onmessage = fn;
-        if (fn && this.pendingBuffer.length > 0) {
-            const buffered = [...this.pendingBuffer];
-            this.pendingBuffer = [];
-            for (const bytes of buffered) {
-                try {
-                    const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-                    const arrayBuffer = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
-                    const msgEv = new MessageEvent('message', { data: arrayBuffer });
-                    fn(msgEv);
-                } catch (e) {
-                    console.error('[VNC UI] Error in pendingBuffer flush:', e);
-                }
+    }
+
+    receiveData(bytes: Uint8Array | number[]) {
+        try {
+            const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+            const arrayBuffer = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
+            const msgEv = new MessageEvent('message', { data: arrayBuffer });
+            this.dispatchEvent(msgEv);
+            if (this._onmessage) {
+                this._onmessage(msgEv);
             }
+        } catch (e) {
+            console.error('[VNC UI] Error in receiveData:', e);
         }
     }
 
@@ -97,24 +96,7 @@ class VncTransportAdapter extends EventTarget {
         if (this.onclose) this.onclose(closeEv);
     }
 
-    receiveData(bytes: Uint8Array | number[]) {
-        try {
-            const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-            if (!this._onmessage) {
-                console.log('[VNC UI] receiveData queued in pendingBuffer:', uint8.length, 'bytes');
-                this.pendingBuffer.push(uint8);
-                return;
-            }
-            const arrayBuffer = uint8.buffer.slice(uint8.byteOffset, uint8.byteOffset + uint8.byteLength);
-            const msgEv = new MessageEvent('message', { data: arrayBuffer });
-            this.dispatchEvent(msgEv);
-            if (this._onmessage) {
-                this._onmessage(msgEv);
-            }
-        } catch (e) {
-            console.error('[VNC UI] Error in receiveData:', e);
-        }
-    }
+
 }
 
 export const VncCanvas: React.FC<VncCanvasProps> = ({
