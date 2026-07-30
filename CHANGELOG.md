@@ -9,6 +9,14 @@ All notable changes to the **Plan Terminal** project will be documented in this 
 
 ---
 
+## [0.5.31] - 2026-07-30
+
+### Fixed
+- **Host No Longer Steals Focus to a Bogus Tab on Accept**: The generic `serial-bridge` WebRTC control channel was matching the `serial-` tab-mirroring prefix check in `App.tsx`, so every accepted remote connection spawned a spurious `Remote: serial (...)` tab and switched to it, discarding the host's actual current tab. `serial-bridge` is now excluded from that check — the host keeps sharing whichever tab was active when the request was accepted.
+- **Signal Server Session Race on Reconnect** (`plan-signal`): A device reconnecting after a brief network blip could have its fresh WebSocket session deleted moments later by the old socket's delayed cleanup, silently marking the device offline and dropping any new connection requests sent to it. Cleanup now only removes a session if it still owns the current entry in the session map.
+
+---
+
 ## [0.5.30] - 2026-07-30
 
 ### Added

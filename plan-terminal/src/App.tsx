@@ -83,6 +83,15 @@ function App() {
           }];
         }
 
+        // "serial-bridge" is the generic host<->peer control channel (created for every
+        // connection), not a dedicated tab. It gets mapped to whichever tab the host is
+        // actively sharing via share_active_tab/trigger-tab-share, so it must never spawn
+        // or steal focus to a new tab here — doing so overrides the host's current tab
+        // with a bogus "Remote: serial (...)" tab on every Accept.
+        if (label === 'serial-bridge') {
+          return prev;
+        }
+
         // If it's a specific shared tab (e.g. serial-xxx)
         if (label.startsWith('serial-') || label.startsWith('ssh-') || label.startsWith('remote-')) {
           const existing = prev.find(t => t.id === label);
@@ -116,7 +125,7 @@ function App() {
         }];
       });
 
-      if (isWebViewer || label.startsWith('serial-') || label.startsWith('ssh-')) {
+      if (isWebViewer || ((label.startsWith('serial-') || label.startsWith('ssh-')) && label !== 'serial-bridge')) {
         setActiveTabId(isWebViewer ? fromId : label);
       }
     };
@@ -210,7 +219,7 @@ function App() {
         <div className="flex items-center flex-1 overflow-x-auto h-full pr-4">
           <div className="flex items-center justify-center gap-1.5 mr-4 shrink-0 pl-1">
             <img src={logo} alt="Plan Terminal" className="w-5 h-5 pointer-events-none" />
-            <span className="text-[10px] text-muted-foreground font-medium select-none">v0.5.30</span>
+            <span className="text-[10px] text-muted-foreground font-medium select-none">v0.5.31</span>
           </div>
 
           <div className="flex items-end h-full pt-1.5 overflow-x-auto select-none no-scrollbar">
